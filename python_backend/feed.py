@@ -443,7 +443,7 @@ app.add_middleware(
         "http://localhost:8080",  # Alternative dev port
         "https://web-ai-dze2.vercel.app",  # Your Vercel domain
         "https://web-ai-dze2-m4v627xld-cabrerajulian401s-projects.vercel.app",
-        "https://timio-web-ai-klcl.vercel.app/",  # Your specific Vercel domain
+        "https://timio-web-ai-three.vercel.app/",  # Your specific Vercel domain
         "https://web-ai-dze2-git-main-cabrerajulian401s-projects.vercel.app",  # Another Vercel domain
         "https://*.vercel.app",  # All Vercel domains
         "https://*.onrender.com",  # All Render domains
