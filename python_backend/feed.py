@@ -604,11 +604,52 @@ def generate_topics():
         return {
             "message": "Topics generated successfully",
             "topics_count": len(topics.get('topics', [])),
-            "generated_at": datetime.now().isoformat()
+            "generated_at": datetime.now().isoformat(),
+            "topics": topics
         }
     except Exception as e:
         print(f"--- ❌ ERROR GENERATING TOPICS: {e} ---")
-        raise HTTPException(status_code=500, detail="Failed to generate topics")
+        return {
+            "error": str(e), 
+            "topics_count": 0,
+            "message": "Failed to generate topics"
+        }
+
+# Force generation endpoint (bypass cache)
+@app.post("/api/force-generate-topics")
+def force_generate_topics():
+    """Force generate new topics (bypass cache)."""
+    try:
+        # Reset cache to force regeneration
+        hot_topics_manager.cache = {}
+        hot_topics_manager.last_generated = None
+        
+        topics = hot_topics_manager.generate_daily_topics()
+        return {
+            "message": "Topics forcefully generated",
+            "topics_count": len(topics.get('topics', [])),
+            "topics": topics,
+            "generated_at": datetime.now().isoformat()
+        }
+    except Exception as e:
+        print(f"--- ❌ ERROR FORCE GENERATING TOPICS: {e} ---")
+        return {
+            "error": str(e), 
+            "topics_count": 0,
+            "message": "Failed to force generate topics"
+        }
+
+# Debug endpoint
+@app.get("/api/debug/topics")
+def debug_topics():
+    """Debug endpoint to see topics status."""
+    return {
+        "cache_exists": bool(hot_topics_manager.cache),
+        "cache_topics_count": len(hot_topics_manager.cache.get('topics', [])),
+        "last_generated": hot_topics_manager.last_generated.isoformat() if hot_topics_manager.last_generated else None,
+        "cache_content": hot_topics_manager.cache,
+        "manager_status": "initialized"
+    }
 
 # Get cached topics info
 @app.get("/api/topics-info")
