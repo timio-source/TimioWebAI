@@ -1256,6 +1256,8 @@ def get_cache_status():
             "error": str(e)
         }
 
+# Replace your existing /api/feed endpoint with this updated version
+
 @app.get("/api/feed")
 def get_feed():
     """Returns hot topics as a list of articles for the frontend."""
@@ -1334,17 +1336,8 @@ def get_feed():
             queue_length = len(article_generation_queue)
             is_generating = is_generating_articles
         
-        # Return articles with cache metadata
-        return {
-            "articles": articles,
-            "cache_stats": {
-                "total_articles": len(articles),
-                "cached_articles": cached_count,
-                "cache_percentage": (cached_count / len(articles) * 100) if articles else 0,
-                "queue_length": queue_length,
-                "is_generating": is_generating
-            }
-        }
+        # Return just the articles array (for frontend compatibility)
+        return articles
         
     except Exception as e:
         print(f"Error getting hot topics: {e}")
@@ -1377,17 +1370,7 @@ def get_feed():
             "slug": fallback_topic["slug"]
         }])
         
-        return {
-            "articles": [fallback_topic],
-            "cache_stats": {
-                "total_articles": 1,
-                "cached_articles": 0,
-                "cache_percentage": 0,
-                "queue_length": 1,
-                "is_generating": False,
-                "error": str(e)
-            }
-        }
+        return [fallback_topic]
 
 # Add endpoint to check article generation status
 @app.get("/api/article-generation-status")
