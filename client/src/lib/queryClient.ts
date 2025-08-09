@@ -15,14 +15,24 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  // If we have a base URL, prepend it to the URL
-  const fullUrl = API_BASE_URL ? `${API_BASE_URL}${url}` : url;
+  // Fix: Proper URL construction to avoid double slashes
+  let fullUrl;
+  if (API_BASE_URL) {
+    // Remove trailing slash from base URL and leading slash from url
+    const baseUrl = API_BASE_URL.replace(/\/$/, '');
+    const endpoint = url.startsWith('/') ? url.slice(1) : url;
+    fullUrl = `${baseUrl}/${endpoint}`;
+  } else {
+    fullUrl = url;
+  }
+  
+  console.log('Making API request to:', fullUrl); // Debug log
   
   const res = await fetch(fullUrl, {
     method,
     headers: data ? { "Content-Type": "application/json" } : {},
     body: data ? JSON.stringify(data) : undefined,
-    credentials: "omit",  // Changed from "include" to "omit"
+    credentials: "omit",
   });
 
   await throwIfResNotOk(res);
@@ -36,10 +46,21 @@ export const getQueryFn: <T>(options: {
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
     const url = queryKey[0] as string;
-    const fullUrl = API_BASE_URL ? `${API_BASE_URL}${url}` : url;
+    
+    // Fix: Same URL construction logic for queries
+    let fullUrl;
+    if (API_BASE_URL) {
+      const baseUrl = API_BASE_URL.replace(/\/$/, '');
+      const endpoint = url.startsWith('/') ? url.slice(1) : url;
+      fullUrl = `${baseUrl}/${endpoint}`;
+    } else {
+      fullUrl = url;
+    }
+    
+    console.log('Making query request to:', fullUrl); // Debug log
     
     const res = await fetch(fullUrl, {
-      credentials: "omit",  // Changed from "include" to "omit"
+      credentials: "omit",
     });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
