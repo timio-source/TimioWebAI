@@ -8,6 +8,6 @@
     }
   ],
   "env": {
-    "VITE_API_URL": "https://web-ai-v4vh.onrender.com"
+    "VITE_API_URL": "https://timiowebai.onrender.com/"
   }
 } 
