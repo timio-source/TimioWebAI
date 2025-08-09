@@ -173,12 +173,12 @@ You MUST generate ONLY valid JSON output with NO commentary or explanations.
 FORMAT:
 ```json
 [
-  {
+  {{
     "headline": "Compelling, serious news headline",
     "description": "Two sentence description explaining the significance and impact.",
     "category": "Politics/Technology/Business/Health/Environment/International/Education/General",
     "source_url": "URL of the original news source"
-  }
+  }}
 ]
 ```
 
