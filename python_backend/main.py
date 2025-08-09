@@ -194,82 +194,7 @@ async def generate_article_for_topic(topic):
         traceback.print_exc()
         return None
 
-# Add this endpoint to manually trigger cache warming
-@app.post("/api/warm-cache")
-async def warm_cache():
-    """Manually trigger article generation for all feed topics."""
-    try:
-        from feed import hot_topics_manager
-        topics_data = hot_topics_manager.get_cached_topics()
-        topics = topics_data.get('topics', [])
-        
-        if not topics:
-            return {"message": "No topics found to generate articles for", "count": 0}
-        
-        # Queue all topics for generation
-        queue_article_generation(topics)
-        
-        return {
-            "message": f"Queued {len(topics)} topics for article generation",
-            "count": len(topics),
-            "topics": [topic.get('headline', 'Unknown') for topic in topics]
-        }
-        
-    except Exception as e:
-        print(f"--- ❌ ERROR IN CACHE WARMING: {e} ---")
-        raise HTTPException(status_code=500, detail=f"Error warming cache: {str(e)}")
 
-# Add this endpoint to check cache status
-@app.get("/api/cache-status")
-def get_cache_status():
-    """Get the current cache status."""
-    try:
-        from feed import hot_topics_manager
-        topics_data = hot_topics_manager.get_cached_topics()
-        topics = topics_data.get('topics', [])
-        
-        cached_count = 0
-        topic_status = []
-        
-        for topic in topics:
-            topic_slug = topic.get('headline', '').lower().replace(' ', '-').replace('"', '')
-            topic_slug = re.sub(r'[^a-z0-9-]', '', topic_slug)
-            
-            is_cached = topic_slug in report_cache
-            if is_cached:
-                cached_count += 1
-            
-            topic_status.append({
-                "headline": topic.get('headline', 'Unknown'),
-                "slug": topic_slug,
-                "cached": is_cached
-            })
-        
-        with article_generation_lock:
-            queue_length = len(article_generation_queue)
-            is_generating = is_generating_articles
-        
-        return {
-            "total_topics": len(topics),
-            "cached_articles": cached_count,
-            "uncached_articles": len(topics) - cached_count,
-            "cache_percentage": (cached_count / len(topics) * 100) if topics else 0,
-            "queue_length": queue_length,
-            "is_generating": is_generating,
-            "topic_status": topic_status
-        }
-        
-    except Exception as e:
-        print(f"--- ❌ ERROR GETTING CACHE STATUS: {e} ---")
-        return {
-            "total_topics": 0,
-            "cached_articles": len(report_cache),
-            "uncached_articles": 0,
-            "cache_percentage": 0,
-            "queue_length": 0,
-            "is_generating": False,
-            "error": str(e)
-        }
 # --- Pexels Tool ---
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 if PEXELS_API_KEY:
@@ -1253,6 +1178,83 @@ async def get_article(slug: str):
     return report
 # Update your existing /api/feed endpoint
 # Replace your existing /api/feed endpoint with this updated version
+
+# Add this endpoint to manually trigger cache warming
+@app.post("/api/warm-cache")
+async def warm_cache():
+    """Manually trigger article generation for all feed topics."""
+    try:
+        from feed import hot_topics_manager
+        topics_data = hot_topics_manager.get_cached_topics()
+        topics = topics_data.get('topics', [])
+        
+        if not topics:
+            return {"message": "No topics found to generate articles for", "count": 0}
+        
+        # Queue all topics for generation
+        queue_article_generation(topics)
+        
+        return {
+            "message": f"Queued {len(topics)} topics for article generation",
+            "count": len(topics),
+            "topics": [topic.get('headline', 'Unknown') for topic in topics]
+        }
+        
+    except Exception as e:
+        print(f"--- ❌ ERROR IN CACHE WARMING: {e} ---")
+        raise HTTPException(status_code=500, detail=f"Error warming cache: {str(e)}")
+
+# Add this endpoint to check cache status
+@app.get("/api/cache-status")
+def get_cache_status():
+    """Get the current cache status."""
+    try:
+        from feed import hot_topics_manager
+        topics_data = hot_topics_manager.get_cached_topics()
+        topics = topics_data.get('topics', [])
+        
+        cached_count = 0
+        topic_status = []
+        
+        for topic in topics:
+            topic_slug = topic.get('headline', '').lower().replace(' ', '-').replace('"', '')
+            topic_slug = re.sub(r'[^a-z0-9-]', '', topic_slug)
+            
+            is_cached = topic_slug in report_cache
+            if is_cached:
+                cached_count += 1
+            
+            topic_status.append({
+                "headline": topic.get('headline', 'Unknown'),
+                "slug": topic_slug,
+                "cached": is_cached
+            })
+        
+        with article_generation_lock:
+            queue_length = len(article_generation_queue)
+            is_generating = is_generating_articles
+        
+        return {
+            "total_topics": len(topics),
+            "cached_articles": cached_count,
+            "uncached_articles": len(topics) - cached_count,
+            "cache_percentage": (cached_count / len(topics) * 100) if topics else 0,
+            "queue_length": queue_length,
+            "is_generating": is_generating,
+            "topic_status": topic_status
+        }
+        
+    except Exception as e:
+        print(f"--- ❌ ERROR GETTING CACHE STATUS: {e} ---")
+        return {
+            "total_topics": 0,
+            "cached_articles": len(report_cache),
+            "uncached_articles": 0,
+            "cache_percentage": 0,
+            "queue_length": 0,
+            "is_generating": False,
+            "error": str(e)
+        }
 
 @app.get("/api/feed")
 def get_feed():
