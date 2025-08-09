@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Share2, Clock, TrendingUp, Eye, Settings, ChevronDown, Search, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Share2, Clock, TrendingUp, Eye, Search, ChevronDown, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import { ExpandableSection } from "@/components/ui/expandable-section";
 import { Timeline } from "@/components/ui/timeline";
 import { CitedSources } from "@/components/ui/cited-sources";
 import { ThemeController } from "@/components/theme-controller";
+import { Header } from "@/components/header";
 import { useToast } from "@/hooks/use-toast";
 import { useTheme } from "@/hooks/use-theme";
 import { apiRequest } from "@/lib/queryClient";
@@ -51,22 +52,26 @@ export default function ArticlePage() {
 
   const researchMutation = useMutation({
     mutationFn: async (query: string) => {
-      const response = await apiRequest("POST", "/api/research", { query });
+      const response = await apiRequest("POST", "api/research", { query });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`${response.status}: ${errorText}`);
+      }
       return response.json();
     },
     onSuccess: (data) => {
-      // Navigate to the generated research report
-      setLocation(`/article/${data.slug}`);
+      // Navigate to research loading page
+      setLocation('/research-loading');
       toast({
-        title: "Research Report Generated",
-        description: "Your comprehensive research report is ready to view.",
+        title: "Research Started",
+        description: "Generating your comprehensive research report...",
       });
     },
     onError: (error) => {
       console.error("Research generation failed:", error);
       toast({
         title: "Research Failed",
-        description: "Unable to generate research report. Please try again.",
+        description: "Unable to start research. Please try again.",
         variant: "destructive",
       });
     }
@@ -226,100 +231,77 @@ export default function ArticlePage() {
     }
   };
 
-  const handleBackToFeed = () => {
-    setLocation("/");
+  const handleThemeToggle = () => {
+    setShowThemeController(!showThemeController);
   };
 
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSearch = () => {
     if (searchQuery.trim()) {
-      // Save search query to localStorage for persistence (for both dummy and real modes)
+      // Save search query to localStorage for persistence
       localStorage.setItem('searchQuery', searchQuery);
       
       if (useDummyMode) {
-        // If dummy mode is enabled, navigate directly to the dummy article without any API calls
+        // If dummy mode is enabled, navigate directly to the dummy article
         setLocation('/article/one-big-beautiful-bill-trump-2025');
         return;
       }
       
-      // Navigate to loading page which will handle the research
-      setLocation('/research-loading');
+      // Trigger the research mutation
+      researchMutation.mutate(searchQuery.trim());
     }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
-      handleSearch(e);
+      handleSearch();
     }
   };
 
-  // Show dummy mode loading overlay (keeping search bar visible)
+  // Show dummy mode loading overlay
   if (dummyModeLoading) {
     return (
       <div className="min-h-screen theme-page-bg">
-        {/* Keep the header with search bar */}
-        <header className="theme-header-bg shadow-sm relative">
-          <div className="flex items-center justify-between h-20 sm:h-24 md:h-32 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center space-x-3 sm:space-x-4">
-              <img 
-                src={timioLogo} 
-                alt="TIMIO News" 
-                className="h-8 w-8 sm:h-10 sm:w-10 md:h-12 md:w-12 object-contain" 
-              />
-              <h1 className="text-xl sm:text-2xl md:text-3xl font-bold theme-text-primary">
-                TIMIO News
-              </h1>
-            </div>
-            
-            <div className="flex items-center space-x-2 sm:space-x-4">
-              <Button 
-                variant="ghost" 
-                size="sm"
-                onClick={() => setShowThemeController(!showThemeController)}
-                className="p-2"
-              >
-                <Settings className="h-5 w-5" />
-              </Button>
-            </div>
-          </div>
-          
-          {/* Search Bar - Same as feed page */}
-          <div className="border-t theme-header-border">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
-              <div className="flex flex-col items-center space-y-4 sm:space-y-6">
-                <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold theme-research-prompt-text text-center px-4">
-                  Generate a report on any event
-                </h2>
-                <div className="relative w-full max-w-2xl px-4 sm:px-0">
-                  {/* Enhanced background with gradient */}
-                  <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-blue-700 rounded-xl sm:rounded-2xl blur-sm opacity-20"></div>
-                  <div className="relative bg-white rounded-xl sm:rounded-2xl shadow-xl sm:shadow-2xl border-2 border-blue-200 hover:border-blue-400 transition-all duration-300 hover:shadow-3xl transform hover:-translate-y-1">
-                    <Search className="absolute left-3 sm:left-6 top-1/2 transform -translate-y-1/2 h-4 w-4 sm:h-7 sm:w-7 text-blue-500" />
-                    <Input
-                      type="text"
-                      placeholder="Enter a story to research..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      onKeyPress={handleKeyPress}
-                      className="w-full pl-10 sm:pl-16 pr-20 sm:pr-32 py-3 sm:py-6 text-base sm:text-xl bg-transparent border-0 focus:ring-0 focus:outline-none placeholder:text-gray-400 touch-manipulation"
+        {/* Header Component */}
+        <Header 
+          onThemeToggle={handleThemeToggle}
+          showRefresh={false}
+        />
+
+        {/* Search Bar Section */}
+        <div className="border-t theme-header-border">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+            <div className="flex flex-col items-center space-y-4 sm:space-y-6">
+              <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold theme-research-prompt-text text-center px-4">
+                Generate a report on any event
+              </h2>
+              <div className="relative w-full max-w-2xl px-4 sm:px-0">
+                <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-blue-700 rounded-xl sm:rounded-2xl blur-sm opacity-20"></div>
+                <div className="relative bg-white rounded-xl sm:rounded-2xl shadow-xl sm:shadow-2xl border-2 border-blue-200 hover:border-blue-400 transition-all duration-300 hover:shadow-3xl transform hover:-translate-y-1">
+                  <Search className="absolute left-3 sm:left-6 top-1/2 transform -translate-y-1/2 h-4 w-4 sm:h-7 sm:w-7 text-blue-500" />
+                  <Input
+                    type="text"
+                    placeholder="Enter a story to research..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyPress={handleKeyPress}
+                    className="w-full pl-10 sm:pl-16 pr-20 sm:pr-32 py-3 sm:py-6 text-base sm:text-xl bg-transparent border-0 focus:ring-0 focus:outline-none placeholder:text-gray-400 touch-manipulation"
+                    disabled
+                  />
+                  <div className="absolute right-1 sm:right-4 top-1/2 transform -translate-y-1/2">
+                    <Button 
+                      onClick={handleSearch}
                       disabled
-                    />
-                    <div className="absolute right-1 sm:right-4 top-1/2 transform -translate-y-1/2">
-                      <Button 
-                        onClick={handleSearch}
-                        disabled
-                        className="bg-blue-600 hover:bg-blue-700 px-2 sm:px-6 py-1.5 sm:py-2 text-white font-semibold rounded-lg shadow-md text-xs sm:text-base disabled:opacity-50 touch-manipulation min-h-[36px] sm:min-h-[40px]"
-                      >
-                        <span className="hidden sm:inline">Research</span>
-                        <span className="sm:hidden">Go</span>
-                      </Button>
-                    </div>
+                      className="bg-blue-600 hover:bg-blue-700 px-2 sm:px-6 py-1.5 sm:py-2 text-white font-semibold rounded-lg shadow-md text-xs sm:text-base disabled:opacity-50 touch-manipulation min-h-[36px] sm:min-h-[40px]"
+                    >
+                      <span className="hidden sm:inline">Research</span>
+                      <span className="sm:hidden">Go</span>
+                    </Button>
                   </div>
                 </div>
               </div>
             </div>
           </div>
-        </header>
+        </div>
 
         {/* Loading overlay for content area */}
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -333,11 +315,7 @@ export default function ArticlePage() {
         </main>
 
         {/* Theme Controller */}
-        {showThemeController && (
-          <div className="fixed inset-0 z-50 pointer-events-none">
-            <ThemeController onClose={() => setShowThemeController(false)} />
-          </div>
-        )}
+        {showThemeController && <ThemeController onClose={() => setShowThemeController(false)} />}
       </div>
     );
   }
@@ -345,31 +323,12 @@ export default function ArticlePage() {
   if (isLoading) {
     return (
       <div className="min-h-screen theme-page-bg">
-        <header className="theme-header-bg shadow-sm relative">
-          <div className="absolute bottom-0 left-0 right-0 h-0.5 theme-divider"></div>
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between h-32">
-              <div className="flex items-center space-x-6">
-                {/* Logo and Brand */}
-                <div className="flex items-center space-x-6">
-                  <img 
-                    src={timioLogo} 
-                    alt="TIMIO News" 
-                    className="h-16 w-16 rounded-lg"
-                  />
-                  <div>
-                    <span className="text-5xl font-bold text-brand-dark">TIMIO News</span>
-                    <p className="text-xl text-gray-600 mt-2">Truth. Trust. Transparency.</p>
-                  </div>
-                </div>
-
-                <Skeleton className="h-6 w-32" />
-                <Skeleton className="h-8 w-24" />
-              </div>
-              <Skeleton className="h-10 w-20" />
-            </div>
-          </div>
-        </header>
+        {/* Header Component */}
+        <Header 
+          onThemeToggle={handleThemeToggle}
+          showRefresh={false}
+        />
+        
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div className="lg:col-span-8">
@@ -386,19 +345,32 @@ export default function ArticlePage() {
 
   if (!articleData || !articleData.article) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <Card className="w-full max-w-md mx-4">
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <h1 className="text-2xl font-bold text-gray-900 mb-2">Article Not Found</h1>
-              <p className="text-gray-600 mb-4">The article you're looking for doesn't exist.</p>
-              <Button onClick={handleBackToFeed} variant="outline">
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Go Back
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+      <div className="min-h-screen theme-page-bg">
+        {/* Header Component */}
+        <Header 
+          onThemeToggle={handleThemeToggle}
+          showRefresh={false}
+        />
+        
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex items-center justify-center min-h-[60vh]">
+            <Card className="w-full max-w-md mx-4">
+              <CardContent className="pt-6">
+                <div className="text-center">
+                  <h1 className="text-2xl font-bold text-gray-900 mb-2">Article Not Found</h1>
+                  <p className="text-gray-600 mb-4">The article you're looking for doesn't exist.</p>
+                  <Button onClick={() => setLocation('/')} variant="outline">
+                    <ArrowLeft className="h-4 w-4 mr-2" />
+                    Go Back to Feed
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </main>
+        
+        {/* Theme Controller */}
+        {showThemeController && <ThemeController onClose={() => setShowThemeController(false)} />}
       </div>
     );
   }
@@ -407,14 +379,65 @@ export default function ArticlePage() {
 
   return (
     <div className="min-h-screen theme-page-bg">
+      {/* Header Component */}
+      <Header 
+        onThemeToggle={handleThemeToggle}
+        showRefresh={false}
+      />
+
+      {/* Research Input Section */}
+      <div className="border-t theme-header-border">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+          <div className="flex flex-col items-center space-y-4 sm:space-y-6">
+            <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold theme-research-prompt-text text-center px-4">
+              Generate a report on any event
+            </h2>
+            <div className="relative w-full max-w-2xl px-4 sm:px-0">
+              {/* Enhanced background with gradient */}
+              <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-blue-700 rounded-xl sm:rounded-2xl blur-sm opacity-20"></div>
+              <div className="relative bg-white rounded-xl sm:rounded-2xl shadow-xl sm:shadow-2xl border-2 border-blue-200 hover:border-blue-400 transition-all duration-300 hover:shadow-3xl transform hover:-translate-y-1">
+                <Search className="absolute left-3 sm:left-6 top-1/2 transform -translate-y-1/2 h-4 w-4 sm:h-7 sm:w-7 text-blue-500" />
+                <Input
+                  type="text"
+                  placeholder="Enter a story to research..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyPress={handleKeyPress}
+                  disabled={researchMutation.isPending}
+                  className="w-full pl-10 sm:pl-16 pr-20 sm:pr-32 py-3 sm:py-6 text-base sm:text-xl bg-transparent border-0 focus:ring-0 focus:outline-none placeholder:text-gray-400 touch-manipulation disabled:opacity-50"
+                />
+                <div className="absolute right-1 sm:right-4 top-1/2 transform -translate-y-1/2">
+                  <Button 
+                    onClick={handleSearch}
+                    disabled={researchMutation.isPending || !searchQuery.trim()}
+                    className="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 px-2 sm:px-6 py-1.5 sm:py-2 text-white font-semibold rounded-lg shadow-md text-xs sm:text-base disabled:opacity-50 touch-manipulation min-h-[36px] sm:min-h-[40px]"
+                  >
+                    {researchMutation.isPending ? (
+                      <span className="hidden sm:inline">Researching...</span>
+                    ) : (
+                      <span className="hidden sm:inline">Research</span>
+                    )}
+                    {researchMutation.isPending ? (
+                      <span className="sm:hidden">...</span>
+                    ) : (
+                      <span className="sm:hidden">Go</span>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           {/* Main Content */}
           <div className="lg:col-span-8">
-            {/* Combined Header and Article Hero */}
+            {/* Article Hero */}
             <Card className="theme-article-card-bg theme-article-card-border theme-article-card-hover shadow-card hover:shadow-card-hover transition-shadow duration-200 overflow-hidden animate-fade-in">
               <CardContent className="p-0">
-                {/* Hero Image with Overlay - Increased height to prevent overlap */}
+                {/* Hero Image with Overlay */}
                 <div className="relative overflow-hidden">
                   <img 
                     src={article.heroImageUrl}
@@ -424,74 +447,20 @@ export default function ArticlePage() {
                   {/* Semitransparent mask */}
                   <div className="absolute inset-0 bg-black bg-opacity-40"></div>
 
-                  {/* TIMIO Logo and Search Bar - Over Image with better spacing */}
-                  <div className="absolute top-4 left-4 right-4 pb-2">
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center space-x-2">
-                        <img 
-                          src={timioLogo} 
-                          alt="TIMIO News" 
-                          className="h-6 w-6 rounded-lg"
-                        />
-                        <span className="text-lg font-bold text-white">TIMIO News</span>
-                      </div>
-                      <div className="flex items-center space-x-1 sm:space-x-2">
-                        <Button
-                          onClick={() => setShowThemeController(!showThemeController)}
-                          variant="ghost"
-                          size="sm"
-                          className="text-white hover:bg-white/20 p-1 sm:p-2 min-h-[32px] sm:min-h-[36px] touch-manipulation"
-                        >
-                          <Settings className="h-3 w-3 sm:h-4 sm:w-4" />
-                        </Button>
-                        <Button
-                          onClick={handleBackToFeed}
-                          variant="ghost"
-                          size="sm"
-                          className="text-white hover:bg-white/20 px-2 sm:px-3 py-1 sm:py-2 min-h-[32px] sm:min-h-[36px] touch-manipulation"
-                        >
-                          <ArrowLeft className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
-                          <span className="hidden sm:inline">Back</span>
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Search Bar - Mobile-friendly with responsive design */}
-                    <div className="relative max-w-full sm:max-w-2xl">
-                      <form onSubmit={handleSearch} className="relative">
-                        <div className="relative flex items-center bg-white/20 backdrop-blur-sm rounded-lg border border-white/30 shadow-lg hover:bg-white/30 transition-all duration-300 focus-within:bg-white/30 focus-within:border-white/50">
-                          <Search className="h-3 w-3 sm:h-4 sm:w-4 text-white ml-2 sm:ml-3" />
-                          <input
-                            type="text"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            onKeyPress={handleKeyPress}
-                            placeholder="Generate a report on any event"
-                            className="w-full py-2 px-2 sm:px-3 text-white placeholder-white/70 bg-transparent border-none outline-none text-xs sm:text-sm font-medium touch-manipulation"
-                          />
-                          <Button
-                            type="submit"
-                            disabled={researchMutation.isPending}
-                            className="bg-blue-600/80 hover:bg-blue-700 active:bg-blue-800 text-white px-2 sm:px-4 py-1 rounded-md text-xs sm:text-sm font-semibold transition-all duration-200 hover:shadow-lg disabled:opacity-50 touch-manipulation min-h-[32px] sm:min-h-[36px]"
-                          >
-                            {researchMutation.isPending ? (
-                              <span className="hidden sm:inline">Researching...</span>
-                            ) : (
-                              <span className="hidden sm:inline">Research</span>
-                            )}
-                            {researchMutation.isPending ? (
-                              <span className="sm:hidden">...</span>
-                            ) : (
-                              <span className="sm:hidden">Go</span>
-                            )}
-                          </Button>
-                        </div>
-                      </form>
-                    </div>
+                  {/* Back and Share Buttons */}
+                  <div className="absolute top-4 right-4 flex items-center space-x-2">
+                    <Button
+                      onClick={handleShare}
+                      variant="ghost"
+                      size="sm"
+                      className="text-white hover:bg-white/20 p-2"
+                    >
+                      <Share2 className="h-4 w-4" />
+                    </Button>
                   </div>
 
-                  {/* Headline overlay - Increased top padding to prevent overlap */}
-                  <div className="absolute bottom-0 left-0 right-0 p-6 pt-20">
+                  {/* Headline overlay */}
+                  <div className="absolute bottom-0 left-0 right-0 p-6">
                     <p className="text-xl font-bold text-blue-300 mb-3 tracking-wide">RESEARCH REPORT</p>
                     <h1 className="text-2xl md:text-3xl font-bold text-white leading-tight">
                       {article.title}
@@ -1038,103 +1007,6 @@ export default function ArticlePage() {
                               </div>
                             </div>
                           </div>
-                          
-                          <div className="border-b border-gray-200 pb-8">
-                            <h3 className="font-semibold text-black mb-6 text-xl">Impact on Healthcare and Medicaid</h3>
-                            
-                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-                              {/* Position A */}
-                              <div className="space-y-4">
-                                <div className="flex items-center space-x-3">
-                                  <div className="w-6 h-6 bg-black text-white rounded-full flex items-center justify-center text-sm font-bold">A</div>
-                                  <span className="font-semibold text-black text-sm uppercase tracking-wide">WHITE HOUSE</span>
-                                </div>
-                                <div className="text-gray-700 text-base">
-                                  → "Strengthening Medicaid by eliminating waste, fraud, and abuse"
-                                </div>
-                                <div className="border-l-4 border-gray-400 pl-4">
-                                  <blockquote className="text-gray-800 italic text-base leading-relaxed">
-                                    "Strengthening Medicaid by eliminating waste, fraud, and abuse and blocking illegal immigrants from receiving Medicaid"
-                                  </blockquote>
-                                </div>
-                              </div>
-                              
-                              {/* VS Separator */}
-                              <div className="flex items-center justify-center lg:justify-start">
-                                <span className="text-gray-400 text-2xl font-bold">VS</span>
-                              </div>
-                              
-                              {/* Position B */}
-                              <div className="space-y-4 lg:col-start-2 lg:row-start-1">
-                                <div className="flex items-center space-x-3">
-                                  <div className="w-6 h-6 bg-black text-white rounded-full flex items-center justify-center text-sm font-bold">B</div>
-                                  <span className="font-semibold text-black text-sm uppercase tracking-wide">CBO/KFF</span>
-                                </div>
-                                <div className="text-gray-700 text-base">
-                                  → Bill cuts Medicaid by $800 billion, increases uninsured by 10.9 million
-                                </div>
-                                <div className="border-l-4 border-gray-400 pl-4">
-                                  <blockquote className="text-gray-800 italic text-base leading-relaxed">
-                                    "reduce federal spending on Medicaid by almost $800 billion... increase the number of adults without health insurance by more than 10 million"
-                                  </blockquote>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                          
-                          <div className="pb-8">
-                            <h3 className="font-semibold text-black mb-6 text-xl">Fiscal Responsibility vs. Deficit Increase</h3>
-                            
-                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-                              {/* Position A */}
-                              <div className="space-y-4">
-                                <div className="flex items-center space-x-3">
-                                  <div className="w-6 h-6 bg-black text-white rounded-full flex items-center justify-center text-sm font-bold">A</div>
-                                  <span className="font-semibold text-black text-sm uppercase tracking-wide">WHITE HOUSE</span>
-                                </div>
-                                <div className="text-gray-700 text-base">
-                                  → "Restoring fiscal sanity by cutting $1.5 trillion in spending"
-                                </div>
-                                <div className="border-l-4 border-gray-400 pl-4">
-                                  <blockquote className="text-gray-800 italic text-base leading-relaxed">
-                                    "Restoring fiscal sanity by cutting $1.5 trillion in spending"
-                                  </blockquote>
-                                </div>
-                              </div>
-                              
-                              {/* VS Separator */}
-                              <div className="flex items-center justify-center lg:justify-start">
-                                <span className="text-gray-400 text-2xl font-bold">VS</span>
-                              </div>
-                              
-                              {/* Position B */}
-                              <div className="space-y-4 lg:col-start-2 lg:row-start-1">
-                                <div className="flex items-center space-x-3">
-                                  <div className="w-6 h-6 bg-black text-white rounded-full flex items-center justify-center text-sm font-bold">B</div>
-                                  <span className="font-semibold text-black text-sm uppercase tracking-wide">CBO, AL JAZEERA, PBS</span>
-                                </div>
-                                <div className="text-gray-700 text-base">
-                                  → Bill increases deficit by $2.8–$3.4 trillion over 10 years
-                                </div>
-                                <div className="border-l-4 border-gray-400 pl-4">
-                                  <blockquote className="text-gray-800 italic text-base leading-relaxed">
-                                    "increase federal deficits over the next 10 years by nearly $3.3 trillion"
-                                  </blockquote>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                          
-                          <div className="mt-8 pt-6 border-t border-gray-300">
-                            <div className="text-center">
-                              <span className="text-sm font-semibold text-gray-700">Summary of Sides:</span>
-                              <div className="mt-2">
-                                <span className="text-sm text-gray-600">
-                                  [White House, Treasury] vs [CBO, Pew, KFF, House Democratic Leader, Al Jazeera, PBS]
-                                </span>
-                              </div>
-                            </div>
-                          </div>
                         </div>
                       ) : (
                         // Show message when no conflicting info is available and dummy mode is off
@@ -1157,7 +1029,8 @@ export default function ArticlePage() {
             <CitedSources sources={TextFormatter.formatCitedSources(citedSources)} />
             <div className="border-t-2 border-gray-300 my-6"></div>
           </div>
-          { /* Disclaimer */}
+          
+          {/* Disclaimer */}
           <div className="lg:col-span-8 flex items-center">
             <TriangleAlert className="h-8 w-8 mr-2 fill-yellow-300" />
             <p className="text-sm text-gray-500">
