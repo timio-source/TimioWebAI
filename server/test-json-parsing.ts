@@ -58,7 +58,11 @@ async function runJSONParsingTests() {
       console.log('✓ SUCCESS - Valid JSON produced');
       console.log('Result:', JSON.stringify(parsed, null, 2));
     } catch (error) {
-      console.log('✗ FAILED:', error.message);
+      if (error instanceof Error) {
+        console.log('✗ FAILED:', error.message);
+      } else {
+        console.log('✗ FAILED:', String(error));
+      }
     }
     
     console.log('---\n');
@@ -76,7 +80,11 @@ async function testActualFailure() {
     console.log('✓ Actual failure case resolved');
     console.log('Result:', result);
   } catch (error) {
-    console.log('✗ Actual failure case still failing:', error.message);
+    if (error instanceof Error) {
+      console.log('✗ Actual failure case still failing:', error.message);
+    } else {
+      console.log('✗ Actual failure case still failing:', String(error));
+    }
   }
 }
 

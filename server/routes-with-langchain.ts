@@ -1,4 +1,4 @@
-import { Express } from "express";
+import express, { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { langChainResearchAgent } from "./langchain/research-agent";

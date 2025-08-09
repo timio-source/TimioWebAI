@@ -18,15 +18,19 @@ export class JsonRepairService {
       () => this.reconstructFromPattern(repaired)
     ];
     
-    for (const [index, strategy] of strategies.entries()) {
+    for (let index = 0; index < strategies.length; index++) {
       try {
-        const candidate = strategy();
+        const candidate = strategies[index]();
         console.log(`Trying strategy ${index + 1}:`, candidate.substring(0, 100));
         JSON.parse(candidate);
         console.log(`✓ Strategy ${index + 1} successful`);
         return candidate;
       } catch (error) {
-        console.log(`✗ Strategy ${index + 1} failed:`, error.message);
+        if (error instanceof Error) {
+          console.log(`✗ Strategy ${index + 1} failed:`, error.message);
+        } else {
+          console.log(`✗ Strategy ${index + 1} failed:`, error);
+        }
       }
     }
     

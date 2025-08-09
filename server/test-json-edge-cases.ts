@@ -49,7 +49,11 @@ export function testJSONEdgeCases() {
       JSON.parse(testCase.input);
       console.log('✓ Actually valid JSON');
     } catch (error) {
-      console.log(`✗ Invalid JSON: ${error.message}`);
+      if (error instanceof Error) {
+        console.log(`✗ Invalid JSON: ${error.message}`);
+      } else {
+        console.log('✗ Invalid JSON: Unknown error');
+      }
     }
     console.log('---\n');
   });

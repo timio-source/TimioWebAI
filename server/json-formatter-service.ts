@@ -64,7 +64,11 @@ Common fixes needed:
         return formattedContent;
       } catch (parseError) {
         console.error('✗ JSON formatting failed, still invalid:', parseError);
-        throw new Error(`Formatted JSON is still invalid: ${parseError.message}`);
+        if (parseError instanceof Error) {
+          throw new Error(`Formatted JSON is still invalid: ${parseError.message}`);
+        } else {
+          throw new Error('Formatted JSON is still invalid: Unknown error');
+        }
       }
 
     } catch (error) {

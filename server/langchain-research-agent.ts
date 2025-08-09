@@ -16,9 +16,9 @@ export interface ResearchReport {
 }
 
 export class LangChainResearchAgent {
-  private model: ChatOpenAI;
-  private agent: AgentExecutor;
-  private memory: BufferMemory;
+  private model!: ChatOpenAI;
+  private agent!: AgentExecutor;
+  private memory!: BufferMemory;
 
   constructor() {
     // Initialize agent asynchronously
@@ -175,7 +175,6 @@ Return a comprehensive research report in the specified JSON format.
         agent,
         tools,
         memory: this.memory,
-        verbose: true,
         maxIterations: 10,
       });
 

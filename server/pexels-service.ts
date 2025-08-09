@@ -44,9 +44,9 @@ export class PexelsService {
   }
 
   async searchImageByTopic(query: string, imageIndex: number = 0): Promise<string> {
+    // Create cache key with query and index for unique image assignment
+    const cacheKey = `${query}_${imageIndex}`;
     try {
-      // Create cache key with query and index for unique image assignment
-      const cacheKey = `${query}_${imageIndex}`;
       
       // Check cache first
       if (this.imageCache.has(cacheKey)) {
@@ -224,8 +224,7 @@ export class PexelsService {
       'press release': 'press release news announcement',
       'government': 'government building official news',
       'white house': 'white house government news',
-      'pentagon': 'pentagon military defense news',
-      'supreme court': 'supreme court justice legal news'
+      'pentagon': 'pentagon military defense news'
     };
 
     const lowerQuery = (query || '').toLowerCase();
