@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+langchain
+langgraph
+tavily-python
+langchain-openai
+langchain-core
+langchain-community
+langchain-tavily
+pydantic
+pyhumps
+python-dotenv
+beautifulsoup4
+requests
+lxml
+pexels-api-py 

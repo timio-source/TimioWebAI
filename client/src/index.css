@@ -1,0 +1,206 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: hsl(0, 0%, 100%);
+  --foreground: hsl(240, 10%, 3.9%);
+  --muted: hsl(210, 40%, 98%);
+  --muted-foreground: hsl(215, 16%, 47%);
+  --popover: hsl(0, 0%, 100%);
+  --popover-foreground: hsl(240, 10%, 3.9%);
+  --card: hsl(0, 0%, 100%);
+  --card-foreground: hsl(240, 10%, 3.9%);
+  --border: hsl(214, 32%, 91%);
+  --input: hsl(214, 32%, 91%);
+  --primary: hsl(221, 83%, 53%);
+  --primary-foreground: hsl(210, 40%, 98%);
+  --secondary: hsl(210, 40%, 96%);
+  --secondary-foreground: hsl(222, 84%, 5%);
+  --accent: hsl(210, 40%, 96%);
+  --accent-foreground: hsl(222, 84%, 5%);
+  --destructive: hsl(0, 84%, 60%);
+  --destructive-foreground: hsl(210, 40%, 98%);
+  --ring: hsl(221, 83%, 53%);
+  --radius: 0.5rem;
+  
+  /* Custom colors matching the design */
+  --brand-blue: hsl(221, 83%, 53%);
+  --brand-dark: hsl(240, 10%, 3.9%);
+  --text-muted: hsl(215, 16%, 47%);
+  --border-light: hsl(214, 32%, 91%);
+  --gray-50: hsl(210, 40%, 98%);
+  --gray-600: hsl(215, 16%, 47%);
+  --gray-700: hsl(215, 25%, 27%);
+  --green-500: hsl(142, 76%, 36%);
+  --yellow-500: hsl(48, 96%, 53%);
+  --blue-50: hsl(214, 100%, 97%);
+  --blue-100: hsl(214, 95%, 93%);
+  --blue-600: hsl(221, 83%, 53%);
+  --blue-800: hsl(213, 94%, 68%);
+  --green-100: hsl(149, 80%, 90%);
+  --green-800: hsl(158, 64%, 52%);
+
+  /* Theme System Variables */
+  --page-bg: rgb(249, 250, 251);
+  --divider-color: rgb(0, 0, 0);
+  --divider-width: 2px;
+  --icon-bg: rgb(0, 0, 0);
+  --border-color: rgb(209, 213, 219);
+  --border-width: 2px;
+  --border-focus-color: rgb(59, 130, 246);
+  --report-card-bg: rgb(255, 255, 255);
+  --report-card-border: rgb(209, 213, 219);
+  --article-card-bg: rgb(255, 255, 255);
+  --article-card-border: rgb(209, 213, 219);
+  --article-card-hover-bg: rgb(249, 250, 251);
+  --sidebar-text-color: rgb(75, 85, 99);
+  --sidebar-bg: rgb(255, 255, 255);
+  --sidebar-border-color: rgb(209, 213, 219);
+  --header-text-color: rgb(17, 24, 39);
+  --headline-text-color: rgb(17, 24, 39);
+  --research-card-header-text-color: rgb(55, 65, 81);
+  --body-text-color: rgb(75, 85, 99);
+  --muted-text-color: rgb(156, 163, 175);
+}
+
+/* Theme System Utility Classes */
+.theme-page-bg { background-color: var(--page-bg); }
+.theme-divider { background-color: var(--divider-color); }
+.theme-icon-bg { background-color: var(--icon-bg); }
+.theme-border { border-color: var(--border-color); border-width: var(--border-width); }
+.theme-border-focus:focus { border-color: var(--border-focus-color); }
+.theme-report-card-bg { background-color: var(--report-card-bg); }
+.theme-report-card-border { border-color: var(--report-card-border); }
+.theme-article-card-bg { background-color: var(--article-card-bg); }
+.theme-article-card-border { border-color: var(--article-card-border); }
+.theme-article-card-hover:hover { background-color: var(--article-card-hover-bg); }
+.theme-sidebar-text { color: var(--sidebar-text-color); }
+.theme-sidebar-bg { background-color: var(--sidebar-bg); }
+.theme-sidebar-border { border-color: var(--sidebar-border-color); }
+.theme-header-bg { background-color: var(--header-bg); }
+.theme-header-text { color: var(--header-text-color); }
+.theme-headline-text { color: var(--headline-text-color); }
+.theme-research-card-header-text { color: var(--research-card-header-text-color); }
+.theme-body-text { color: var(--body-text-color); }
+.theme-muted-text { color: var(--muted-text-color); }
+.theme-research-prompt-text { color: var(--research-prompt-text-color); }
+.theme-research-report-label { color: var(--research-report-label-color); }
+.theme-tagline-text { color: var(--tagline-text-color); }
+
+.dark {
+  --background: hsl(240, 10%, 3.9%);
+  --foreground: hsl(0, 0%, 98%);
+  --muted: hsl(240, 3.7%, 15.9%);
+  --muted-foreground: hsl(240, 5%, 64.9%);
+  --popover: hsl(240, 10%, 3.9%);
+  --popover-foreground: hsl(0, 0%, 98%);
+  --card: hsl(240, 10%, 3.9%);
+  --card-foreground: hsl(0, 0%, 98%);
+  --border: hsl(240, 3.7%, 15.9%);
+  --input: hsl(240, 3.7%, 15.9%);
+  --primary: hsl(221, 83%, 53%);
+  --primary-foreground: hsl(210, 40%, 98%);
+  --secondary: hsl(240, 3.7%, 15.9%);
+  --secondary-foreground: hsl(0, 0%, 98%);
+  --accent: hsl(240, 3.7%, 15.9%);
+  --accent-foreground: hsl(0, 0%, 98%);
+  --destructive: hsl(0, 62.8%, 30.6%);
+  --destructive-foreground: hsl(0, 0%, 98%);
+  --ring: hsl(240, 4.9%, 83.9%);
+  --radius: 0.5rem;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-gray-50 text-brand-dark;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer components {
+  .brand-blue {
+    color: var(--brand-blue);
+  }
+  
+  .text-brand-dark {
+    color: var(--brand-dark);
+  }
+  
+  .text-muted {
+    color: var(--text-muted);
+  }
+  
+  .bg-brand-blue {
+    background-color: var(--brand-blue);
+  }
+  
+  .border-light {
+    border-color: var(--border-light);
+  }
+  
+  .shadow-card {
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+  }
+  
+  .shadow-card-hover {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  }
+  
+  .line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}
+
+@layer utilities {
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-in-out;
+  }
+  
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+  
+  @keyframes fadeIn {
+    0% {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  
+  @keyframes slideUp {
+    0% {
+      transform: translateY(10px);
+      opacity: 0;
+    }
+    100% {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+}
+
+/* Loading progress animation */
+@keyframes loading-progress {
+  0% { width: 0%; }
+  30% { width: 35%; }
+  60% { width: 65%; }
+  100% { width: 85%; }
+}
+
+.loading-progress {
+  animation: loading-progress 0.8s ease-in-out forwards;
+}
