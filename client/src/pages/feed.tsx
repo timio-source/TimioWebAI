@@ -58,7 +58,7 @@ export default function FeedPage() {
 
   const researchMutation = useMutation({
     mutationFn: async (query: string) => {
-      const response = await apiRequest("POST", "/api/research", { query });
+      const response = await apiRequest("POST", "api/research", { query });
       return response.json();
     },
     onSuccess: (data) => {
