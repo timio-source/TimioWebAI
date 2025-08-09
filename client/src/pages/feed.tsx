@@ -58,22 +58,33 @@ export default function FeedPage() {
 
   const researchMutation = useMutation({
     mutationFn: async (query: string) => {
-      const response = await apiRequest("POST", "api/research", { query });
-      return response.json();
+      try {
+        const response = await apiRequest("POST", "api/research", { query });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`${response.status}: ${errorText}`);
+        }
+        
+        return response.json();
+      } catch (error) {
+        console.error("API request failed:", error);
+        throw error;
+      }
     },
     onSuccess: (data) => {
-      // Navigate to the generated research report
-      setLocation(`/article/${data.slug}`);
+      // Navigate to the research loading page with the query
+      setLocation('/research-loading');
       toast({
-        title: "Research Report Generated",
-        description: "Your comprehensive research report is ready to view.",
+        title: "Research Started",
+        description: "Generating your comprehensive research report...",
       });
     },
     onError: (error) => {
       console.error("Research generation failed:", error);
       toast({
         title: "Research Failed",
-        description: "Unable to generate research report. Please try again.",
+        description: "Unable to start research. Please try again.",
         variant: "destructive",
       });
     }
@@ -90,8 +101,8 @@ export default function FeedPage() {
         return;
       }
       
-      // Navigate to loading page which will handle the research
-      setLocation('/research-loading');
+      // Trigger the research mutation
+      researchMutation.mutate(searchQuery.trim());
     }
   };
 
@@ -99,6 +110,20 @@ export default function FeedPage() {
     if (e.key === 'Enter') {
       handleSearch();
     }
+  };
+
+  const handleTopicResearch = (articleTitle: string) => {
+    // Save the article title as the search query
+    localStorage.setItem('searchQuery', articleTitle);
+    
+    if (useDummyMode) {
+      // If dummy mode is enabled, navigate directly to the dummy article
+      setLocation('/article/one-big-beautiful-bill-trump-2025');
+      return;
+    }
+    
+    // Navigate to research loading page which will handle the research
+    setLocation('/research-loading');
   };
 
   if (isLoading) {
@@ -219,12 +244,13 @@ export default function FeedPage() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     onKeyPress={handleKeyPress}
-                    className="w-full pl-10 sm:pl-16 pr-20 sm:pr-32 py-3 sm:py-6 text-base sm:text-xl bg-transparent border-0 focus:ring-0 focus:outline-none placeholder:text-gray-400 touch-manipulation"
+                    disabled={researchMutation.isPending}
+                    className="w-full pl-10 sm:pl-16 pr-20 sm:pr-32 py-3 sm:py-6 text-base sm:text-xl bg-transparent border-0 focus:ring-0 focus:outline-none placeholder:text-gray-400 touch-manipulation disabled:opacity-50"
                   />
                   <div className="absolute right-1 sm:right-4 top-1/2 transform -translate-y-1/2">
                     <Button 
                       onClick={handleSearch}
-                      disabled={researchMutation.isPending}
+                      disabled={researchMutation.isPending || !searchQuery.trim()}
                       className="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 px-2 sm:px-6 py-1.5 sm:py-2 text-white font-semibold rounded-lg shadow-md text-xs sm:text-base disabled:opacity-50 touch-manipulation min-h-[36px] sm:min-h-[40px]"
                     >
                       {researchMutation.isPending ? (
@@ -263,6 +289,7 @@ export default function FeedPage() {
                         src={article.heroImageUrl}
                         alt={article.title}
                         className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-200"
+                        loading="lazy"
                       />
                       {/* Semitransparent mask */}
                       <div className="absolute inset-0 bg-black bg-opacity-40"></div>
@@ -285,10 +312,7 @@ export default function FeedPage() {
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            // Save the article title as the search query
-                            localStorage.setItem('searchQuery', article.title);
-                            // Navigate to research loading page
-                            setLocation('/research-loading');
+                            handleTopicResearch(article.title);
                           }}
                         >
                           {article.title}
@@ -325,10 +349,7 @@ export default function FeedPage() {
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            // Save the article title as the search query
-                            localStorage.setItem('searchQuery', article.title);
-                            // Navigate to research loading page
-                            setLocation('/research-loading');
+                            handleTopicResearch(article.title);
                           }}
                         >
                           Research
