@@ -1,4 +1,3 @@
-
 import os
 import re
 import json
@@ -6,8 +5,11 @@ import uuid
 import asyncio
 import threading
 import time
+import random
+import logging
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -23,10 +25,15 @@ import requests
 from bs4 import BeautifulSoup
 from langchain_core.tools import tool
 from pexelsapi.pexels import Pexels
+from openai import RateLimitError
 
 from schemas import ResearchReport
 
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- Global Variables ---
 # In-Memory Cache - A simple dictionary to store generated reports by slug
@@ -35,18 +42,60 @@ report_cache: Dict[str, ResearchReport] = {}
 # Server refresh tracking
 last_server_refresh = None
 
-executor = ThreadPoolExecutor(max_workers=2)  # Limit concurrent article generation
+# Rate limiting: Reduced to 1 worker to avoid concurrent rate limit hits
+executor = ThreadPoolExecutor(max_workers=1)
 
 # Article Generation Queue
 article_generation_queue = []
 article_generation_lock = threading.Lock()
 is_generating_articles = False
 
+# Rate limiting decorator
+def with_rate_limit_retry(max_retries=3, base_delay=2):
+    """Decorator to handle rate limit errors with exponential backoff."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except RateLimitError as e:
+                    if attempt == max_retries - 1:
+                        logger.error(f"Rate limit exceeded after {max_retries} attempts: {e}")
+                        raise
+                    
+                    # Extract wait time from error message if available
+                    error_msg = str(e)
+                    wait_time = base_delay * (2 ** attempt)  # Exponential backoff
+                    
+                    # Try to parse the suggested wait time from the error
+                    match = re.search(r'Please try again in (\d+\.?\d*)s', error_msg)
+                    if match:
+                        suggested_wait = float(match.group(1))
+                        wait_time = max(wait_time, suggested_wait)
+                    
+                    # Add some jitter to avoid thundering herd
+                    jitter = random.uniform(0.1, 0.5)
+                    total_wait = wait_time + jitter
+                    
+                    logger.warning(f"Rate limit hit (attempt {attempt + 1}/{max_retries}), waiting {total_wait:.2f}s")
+                    time.sleep(total_wait)
+                    
+                except Exception as e:
+                    logger.error(f"Non-rate-limit error in {func.__name__}: {e}")
+                    raise
+            
+            return None
+        return wrapper
+    return decorator
+
+# Queue management functions
 def queue_article_generation(topics):
     """Add topics to the article generation queue if they don't have cached articles."""
     global article_generation_queue, is_generating_articles
     
     with article_generation_lock:
+        new_topics = []
         for topic in topics:
             # Generate slug for the topic
             topic_slug = topic.get('headline', '').lower().replace(' ', '-').replace('"', '')
@@ -62,16 +111,19 @@ def queue_article_generation(topics):
                 
                 if not already_queued:
                     topic['slug'] = topic_slug
-                    article_generation_queue.append(topic)
-                    print(f"--- 📝 QUEUED ARTICLE GENERATION FOR: {topic.get('headline', 'Unknown')} ---")
+                    new_topics.append(topic)
+        
+        # Add new topics to queue
+        article_generation_queue.extend(new_topics)
+        logger.info(f"📝 Queued {len(new_topics)} new articles for generation")
     
     # Start background generation if not already running
     if not is_generating_articles and article_generation_queue:
-        print("--- 🚀 STARTING BACKGROUND ARTICLE GENERATION ---")
+        logger.info("🚀 Starting background article generation")
         executor.submit(process_article_generation_queue)
 
 def process_article_generation_queue():
-    """Process articles in the generation queue."""
+    """Process articles in the generation queue with rate limiting."""
     global is_generating_articles, article_generation_queue
     
     with article_generation_lock:
@@ -80,53 +132,79 @@ def process_article_generation_queue():
         is_generating_articles = True
     
     try:
+        processed_count = 0
+        failed_count = 0
+        
         while True:
             with article_generation_lock:
                 if not article_generation_queue:
                     break
                 topic = article_generation_queue.pop(0)
             
-            print(f"--- 🔄 GENERATING ARTICLE FOR: {topic.get('headline', 'Unknown')} ---")
+            topic_name = topic.get('headline', 'Unknown')
+            logger.info(f"🔄 Generating article {processed_count + 1} for: {topic_name}")
             
-            # Use asyncio to run the async function
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             try:
-                slug = loop.run_until_complete(generate_article_for_topic(topic))
+                # Check if already cached before processing
+                topic_slug = topic.get('slug', '')
+                if topic_slug in report_cache:
+                    logger.info(f"✅ Article already cached: {topic_slug}")
+                    continue
+                
+                # Generate the article with retry logic
+                slug = generate_article_with_retry(topic)
+                
                 if slug:
-                    print(f"--- ✅ ARTICLE GENERATED AND CACHED: {slug} ---")
+                    processed_count += 1
+                    logger.info(f"✅ Article generated and cached: {slug}")
                 else:
-                    print(f"--- ❌ FAILED TO GENERATE ARTICLE FOR: {topic.get('headline', 'Unknown')} ---")
-            finally:
-                loop.close()
+                    failed_count += 1
+                    logger.error(f"❌ Failed to generate article for: {topic_name}")
+                
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"❌ Error generating article for {topic_name}: {e}")
+                
+                # Re-queue the topic if it was a rate limit error
+                if "rate limit" in str(e).lower():
+                    with article_generation_lock:
+                        article_generation_queue.append(topic)
+                    logger.info(f"🔄 Re-queued {topic_name} due to rate limit")
             
-            # Small delay between generations to avoid overwhelming the system
-            time.sleep(2)
+            # Mandatory delay between articles to respect rate limits
+            time.sleep(5)  # 5 seconds between each article generation
+            
+        logger.info(f"🏁 Background generation completed: {processed_count} successful, {failed_count} failed")
     
     except Exception as e:
-        print(f"--- ❌ ERROR IN BACKGROUND ARTICLE GENERATION: {e} ---")
+        logger.error(f"❌ Error in background article generation: {e}")
     
     finally:
         with article_generation_lock:
             is_generating_articles = False
-        print("--- 🏁 BACKGROUND ARTICLE GENERATION COMPLETED ---")
+
+# Rate-limited article generation function
+@with_rate_limit_retry(max_retries=5, base_delay=3)
+def generate_article_with_retry(topic):
+    """Generate article with rate limit handling."""
+    return asyncio.run(generate_article_for_topic(topic))
 
 async def generate_article_for_topic(topic):
-    """Generate an article for a specific topic and cache it."""
+    """Generate an article for a specific topic with rate limiting."""
     try:
         topic_headline = topic.get('headline', '')
         topic_slug = topic.get('slug', '')
         
         if not topic_headline:
-            print("--- ❌ NO HEADLINE PROVIDED FOR TOPIC ---")
+            logger.error("No headline provided for topic")
             return None
         
         # Check if article is already cached
         if topic_slug in report_cache:
-            print(f"--- ✅ ARTICLE ALREADY CACHED: {topic_slug} ---")
+            logger.info(f"Article already cached: {topic_slug}")
             return topic_slug
         
-        print(f"--- 🔬 STARTING RESEARCH FOR: {topic_headline} ---")
+        logger.info(f"🔬 Starting research for: {topic_headline}")
         
         # Create initial state for the research workflow
         initial_state = {
@@ -137,8 +215,16 @@ async def generate_article_for_topic(topic):
             "image_urls": {}
         }
         
-        # Execute the research workflow
-        final_state = graph.invoke(initial_state, {"recursion_limit": 100})
+        # Execute the research workflow with rate limiting
+        try:
+            final_state = graph.invoke(initial_state, {"recursion_limit": 100})
+        except RateLimitError as e:
+            logger.error(f"Rate limit during graph execution: {e}")
+            # Wait and retry once
+            wait_time = 10
+            logger.info(f"Waiting {wait_time}s before retry...")
+            time.sleep(wait_time)
+            final_state = graph.invoke(initial_state, {"recursion_limit": 100})
         
         # Extract the research report from the final state
         final_report_data = {}
@@ -185,15 +271,12 @@ async def generate_article_for_topic(topic):
         validated_report = ResearchReport.model_validate(final_report_data)
         report_cache[topic_slug] = validated_report
         
-        print(f"--- ✅ ARTICLE GENERATED AND CACHED: {topic_slug} ---")
+        logger.info(f"✅ Article generated and cached: {topic_slug}")
         return topic_slug
         
     except Exception as e:
-        print(f"--- ❌ ERROR GENERATING ARTICLE FOR {topic.get('headline', 'Unknown')}: {e} ---")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error generating article for {topic.get('headline', 'Unknown')}: {e}")
         return None
-
 
 # --- Pexels Tool ---
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
@@ -206,17 +289,16 @@ else:
 def pexels_tool(query: str) -> List[Dict[str, Any]]:
     """Searches for images on Pexels and returns a list of image URLs."""
     if not pexels_api:
-        print("--- PEXELS API KEY NOT FOUND ---")
+        logger.warning("PEXELS API KEY NOT FOUND")
         return []
     try:
         search_photos = pexels_api.search_photos(query, page=1, per_page=5)
         return [{"url": photo['src']['original']} for photo in search_photos['photos']]
     except Exception as e:
-        print(f"--- PEXELS API ERROR: {e} ---")
+        logger.error(f"PEXELS API ERROR: {e}")
         return []
 
 # --- Research Prompt Template ---
-# This is the main research prompt that enforces real-time, non-partisan research
 RESEARCH_PROMPT_TEMPLATE = """You are a real-time, non-partisan research assistant with live web browsing capability. You NEVER fabricate data, quotes, articles, or URLs. Today you are researching "[QUERY]" You only can output two types of responses:
 1. Content based on real articles, real public sources accessed live through your browsing ability with cited urls.
 2. Should there be issues with type 1, you will say "Error accessing web articles" or "No web article found"
@@ -266,7 +348,6 @@ ii. After each conflict list the conflicting sources as follows: [Source(s)] vs 
 - [Don't waste words on section titles like "Publisher Name:" or "Quote"]"""
 
 # --- Examples for Structured Output ---
-# These examples show the AI exactly what format to output for each section
 example_for_article = {
     "title": "Research Report on [QUERY]",
     "excerpt": "Comprehensive analysis based on real-time web research and primary sources.",
@@ -327,6 +408,7 @@ example_for_perspectives = [
         "conflict_url": "https://opposing-source.com/article"
     }
 ]
+
 example_for_conflicting_info = [
     {
         "conflict_id": "conflict_001",
@@ -359,9 +441,6 @@ examples_map = {
     "conflicting_info": example_for_conflicting_info
 }
 
-
-
-
 # Define a reducer function for merging dictionaries
 def merge_reports(dict1: dict, dict2: dict) -> dict:
     return {**dict1, **dict2}
@@ -390,9 +469,14 @@ class AgentState(TypedDict):
     scraped_data: list
     research_report: Annotated[Optional[dict], merge_reports]
     image_urls: Optional[dict]
-    
-# 3. Agent and Graph Definition
-llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
+# 3. Agent and Graph Definition with optimized LLM
+llm = ChatOpenAI(
+    model="gpt-4o-mini",  # Use mini model for better rate limits
+    temperature=0,
+    max_tokens=1500,      # Limit tokens
+    request_timeout=30
+)
 
 def create_agent(llm, tools, system_prompt):
     prompt = ChatPromptTemplate.from_messages(
@@ -408,25 +492,25 @@ def agent_node(state, agent, name):
     return {"messages": [result]}
 
 # --- Research Agent ---
-# Use the comprehensive research prompt template
 def create_research_prompt(query: str) -> str:
     return RESEARCH_PROMPT_TEMPLATE.replace("[QUERY]", query)
 
 research_agent = create_agent(llm, [tavily_tool], create_research_prompt("placeholder"))
+
 def research_node(state: AgentState):
-    print("--- 🔬 RESEARCHING ---")
+    logger.info("🔬 RESEARCHING")
     # Create dynamic research prompt with the actual query
     dynamic_prompt = create_research_prompt(state['query'])
     dynamic_research_agent = create_agent(llm, [tavily_tool], dynamic_prompt)
     
     state['messages'] = [HumanMessage(content=state['query'])]
     result = dynamic_research_agent.invoke(state)
-    print("--- ✅ RESEARCH COMPLETE ---")
+    logger.info("✅ RESEARCH COMPLETE")
     return {"messages": [result]}
 
 # --- Scraper Agent ---
 def scraper_node(state: AgentState):
-    print("--- 🔍 SCRAPING WEB FOR PRIMARY SOURCES ---")
+    logger.info("🔍 SCRAPING WEB FOR PRIMARY SOURCES")
     urls = []
     scraped_content = []
     if state['messages'][-1].tool_calls:
@@ -439,13 +523,13 @@ def scraper_node(state: AgentState):
                  break
         
         if query:
-            print(f"--- EXECUTING TAVILY SEARCH for: {query} ---")
-            # Encourage primary sources but don't require them - include both primary and reputable secondary sources
+            logger.info(f"EXECUTING TAVILY SEARCH for: {query}")
+            # Encourage primary sources but don't require them
             enhanced_query = f"{query} (site:gov OR site:congress.gov OR site:whitehouse.gov OR site:govinfo.gov OR official statement OR primary source OR reputable news OR authoritative source)"
             tavily_results = tavily_tool.invoke(enhanced_query)
-            print(f"--- 🔍 TAVILY RESULTS TYPE: {type(tavily_results)} ---")
+            logger.info(f"TAVILY RESULTS TYPE: {type(tavily_results)}")
             if isinstance(tavily_results, str):
-                print(f"--- 🔍 TAVILY RESULTS PREVIEW: {tavily_results[:200]}... ---")
+                logger.info(f"TAVILY RESULTS PREVIEW: {tavily_results[:200]}...")
             
             # Handle different return types from TavilySearch tool
             if isinstance(tavily_results, list):
@@ -463,30 +547,29 @@ def scraper_node(state: AgentState):
                     else:
                         results_list = []
                 except json.JSONDecodeError:
-                    print(f"--- ⚠️ COULD NOT PARSE TAVILY RESULTS AS JSON: {tavily_results[:100]}... ---")
+                    logger.warning(f"COULD NOT PARSE TAVILY RESULTS AS JSON: {tavily_results[:100]}...")
                     results_list = []
             else:
-                print(f"--- ⚠️ UNEXPECTED TAVILY RESULTS TYPE: {type(tavily_results)} ---")
+                logger.warning(f"UNEXPECTED TAVILY RESULTS TYPE: {type(tavily_results)}")
                 results_list = []
 
             for res in results_list[:15]:  # Increased to 15 for better coverage
                 try:
                     if isinstance(res, dict) and 'url' in res and 'content' in res:
-                        scraped_content.append({"url": res['url'], "content": res['content']})
+                        # Limit content to reduce token usage
+                        limited_content = res['content'][:1000]
+                        scraped_content.append({"url": res['url'], "content": limited_content})
                         urls.append(res['url'])
                     else:
-                        print(f"--- ⚠️ SKIPPING INVALID RESULT FORMAT: {type(res)} ---")
+                        logger.warning(f"SKIPPING INVALID RESULT FORMAT: {type(res)}")
                 except Exception as e:
-                    print(f"--- ⚠️ ERROR PROCESSING RESULT: {e} ---")
+                    logger.warning(f"ERROR PROCESSING RESULT: {e}")
                     continue
         else:
-             print("--- NO TAVILY SEARCH TOOL CALL FOUND ---")
+             logger.warning("NO TAVILY SEARCH TOOL CALL FOUND")
 
-    print(f"--- SCRAPING {len(urls)} PRIMARY SOURCE URLS ---")
-    # The new TavilySearch tool scrapes content automatically, so we don't need to do it manually here.
-    # The 'scraped_content' is already populated from the tavily_results.
-        
-    print("--- ✅ SCRAPING COMPLETE ---")
+    logger.info(f"SCRAPING {len(urls)} PRIMARY SOURCE URLS")
+    logger.info("✅ SCRAPING COMPLETE")
     return {"scraped_data": scraped_content, "messages": []}
 
 # --- Image Fetcher Agent ---
@@ -497,7 +580,7 @@ You must return a dictionary where the keys are 'hero_image' and 'source_images'
 image_fetcher_agent = create_agent(llm, [pexels_tool], IMAGE_FETCHER_PROMPT)
 
 def image_fetcher_node(state: AgentState):
-    print("--- 🖼️ FETCHING IMAGES ---")
+    logger.info("🖼️ FETCHING IMAGES")
     
     # Fetch hero image
     hero_image_query = state['query']
@@ -513,9 +596,8 @@ def image_fetcher_node(state: AgentState):
             source_image_url = source_image_urls[0]['url'] if source_image_urls else "https://p-cdn.com/generic-source-logo.png"
             source_images.append(source_image_url)
             
-    print("--- ✅ IMAGES FETCHED ---")
+    logger.info("✅ IMAGES FETCHED")
     return {"image_urls": {"hero_image": hero_image_url, "source_images": source_images}}
-
 
 # --- Writer Agents ---
 def create_writer_agent(section_name: str):
@@ -523,8 +605,6 @@ def create_writer_agent(section_name: str):
     if not example:
         raise ValueError(f"No example found for section: {section_name}")
 
-    # The example string is embedded in a prompt template, so its curly braces
-    # need to be escaped to avoid being interpreted as template variables.
     example_str = json.dumps(example, indent=2).replace("{", "{{").replace("}", "}}")
 
     prompt = f"""You are an expert writing agent focused on real-time, non-partisan research. Your sole purpose is to generate a specific section of a research report based on provided web content.
@@ -545,7 +625,7 @@ Now, using the provided web content, generate the '{section_name}' section of th
 """
     return create_agent(llm, [], prompt)
 
-# Create specialized conflicting info agent
+# Create specialized agents with content limitations
 def create_conflicting_info_agent():
     example_str = json.dumps(example_for_conflicting_info, indent=2).replace("{", "{{").replace("}", "}}")
     
@@ -567,85 +647,6 @@ CRITICAL QUOTE AND SOURCE DEDUPLICATION RULE:
 - You MUST also ensure that NO QUOTE is repeated within the conflicting_info section itself
 - You MUST ensure that NO SOURCE is reused within the conflicting_info section itself
 - Each conflict must use completely unique quotes AND unique sources that have not been used in any other conflict
-- If a quote or source has already been used anywhere else, find alternative quotes from different sources
-- Focus on finding unique, distinct quotes and sources that highlight the specific conflicts
-- Avoid using the same quote OR the same source in multiple conflict sections
-- Each source can only appear once in the entire conflicting_info section
-
-Conflict Types to Look For:
-1. Factual Disputes: Different numbers, dates, statistics, or verifiable facts
-2. Interpretive Differences: Different conclusions drawn from the same data
-3. Methodological Conflicts: Different research approaches or methodologies
-4. Bias Patterns: Systematic differences in reporting or presentation
-5. Source Credibility: Conflicts between authoritative vs. non-authoritative sources
-
-You MUST generate a valid JSON output that strictly follows the structure and field names of the example below.
-Do not add any commentary, explanations, or any text outside of the JSON output.
-
-### EXAMPLE FORMAT ###
-```json
-{example_str}
-```
-
-Now, analyze the provided web content to identify at least 2 different conflicts when they exist. For each conflict found:
-- Clearly describe what the conflict is about
-- Provide exact quotes from both sides (ensuring they are different from other sections AND from other conflicts in this section)
-- Include source URLs for verification
-- Categorize the conflict type
-- Assess the severity of the conflict
-- Ensure quote uniqueness within the conflicting_info section
-- NEVER use the same quote in multiple conflicts within this section
-- Each quote must be completely unique across all conflicts
-
-If no conflicts are found, return an empty array [].
-"""
-    return create_agent(llm, [], prompt)
-
-# Create specialized executive summary agent with limited points
-def create_executive_summary_agent():
-    example_str = json.dumps(example_for_executive_summary, indent=2).replace("{", "{{").replace("}", "}}")
-    
-    prompt = f"""You are a specialized executive summary agent focused on creating concise, bullet-point summaries of research findings.
-
-Your goal is to provide a brief, easy-to-read summary of the most important findings from the research.
-
-IMPORTANT: You NEVER fabricate data, quotes, articles, or URLs. You only work with real content from the provided sources.
-
-CONTENT LIMITATIONS:
-- Provide ONLY 4-6 bullet points maximum
-- Each bullet point should be concise and focused on the most critical information
-- Avoid redundant or overlapping information
-- Focus on the most newsworthy or significant findings
-
-You MUST generate a valid JSON output that strictly follows the structure and field names of the example below.
-Do not add any commentary, explanations, or any text outside of the JSON output.
-
-### EXAMPLE FORMAT ###
-```json
-{example_str}
-```
-
-Now, analyze the provided web content to create a concise executive summary with 4-6 key points.
-"""
-    return create_agent(llm, [], prompt)
-
-# Create specialized raw facts agent with limited facts
-def create_raw_facts_agent():
-    example_str = json.dumps(example_for_raw_facts, indent=2).replace("{", "{{").replace("}", "}}")
-    
-    prompt = f"""You are a specialized raw facts agent focused on extracting direct, verifiable facts from reliable sources.
-
-Your goal is to identify the most important factual statements from the provided sources.
-
-IMPORTANT: You NEVER fabricate data, quotes, articles, or URLs. You only work with real content from the provided sources.
-
-CONTENT LIMITATIONS:
-- Provide ONLY 6 facts maximum across all sources
-- Focus on the most significant, verifiable facts
-- Avoid redundant or similar facts from the same source
-- Prioritize facts that are directly quoted or clearly stated
-- Organize by source, but limit to 6 total facts
-- While primary sources are preferred, you may also use reputable news outlets and authoritative sources
 
 You MUST generate a valid JSON output that strictly follows the structure and field names of the example below.
 Do not add any commentary, explanations, or any text outside of the JSON output.
@@ -659,7 +660,6 @@ Now, analyze the provided web content to extract the 6 most important raw facts 
 """
     return create_agent(llm, [], prompt)
 
-# Create specialized perspectives agent with minimum 2 perspectives
 def create_perspectives_agent():
     example_str = json.dumps(example_for_perspectives, indent=2).replace("{", "{{").replace("}", "}}")
     
@@ -735,58 +735,13 @@ def deduplicate_conflicting_quotes(conflicting_info_data, research_report):
                 quotes = re.findall(r'"([^"]*)"', item['description'])
                 existing_quotes.update(quotes)
     
-    print(f"--- 🔍 FOUND {len(existing_quotes)} EXISTING QUOTES FROM OTHER SECTIONS ---")
+    logger.info(f"🔍 FOUND {len(existing_quotes)} EXISTING QUOTES FROM OTHER SECTIONS")
     
     # Filter out conflicts that use duplicate quotes from other sections AND within conflicting_info
     unique_conflicts = []
     conflicting_quotes_used = set()  # Track quotes used within conflicting_info section
     conflicting_sources_used = set()  # Track sources used within conflicting_info section
     
-    # First pass: collect all quotes and sources from conflicting_info to check for internal duplicates
-    all_conflicting_quotes = []
-    all_conflicting_sources = []
-    for conflict in conflicting_info_data:
-        source_a_quote = conflict.get('source_a', {}).get('quote', '')
-        source_b_quote = conflict.get('source_b', {}).get('quote', '')
-        source_a_name = conflict.get('source_a', {}).get('name', '')
-        source_b_name = conflict.get('source_b', {}).get('name', '')
-        
-        if source_a_quote:
-            all_conflicting_quotes.append(source_a_quote)
-        if source_b_quote:
-            all_conflicting_quotes.append(source_b_quote)
-        if source_a_name:
-            all_conflicting_sources.append(source_a_name)
-        if source_b_name:
-            all_conflicting_sources.append(source_b_name)
-    
-    # Check for internal duplicates before processing
-    duplicate_quotes_internal = set()
-    duplicate_sources_internal = set()
-    seen_quotes = set()
-    seen_sources = set()
-    
-    for quote in all_conflicting_quotes:
-        if quote in seen_quotes:
-            duplicate_quotes_internal.add(quote)
-        seen_quotes.add(quote)
-    
-    for source in all_conflicting_sources:
-        if source in seen_sources:
-            duplicate_sources_internal.add(source)
-        seen_sources.add(source)
-    
-    if duplicate_quotes_internal:
-        print(f"--- 🚨 FOUND {len(duplicate_quotes_internal)} INTERNAL DUPLICATE QUOTES IN CONFLICTING_INFO ---")
-        for quote in duplicate_quotes_internal:
-            print(f"   Duplicate Quote: {quote[:100]}...")
-    
-    if duplicate_sources_internal:
-        print(f"--- 🚨 FOUND {len(duplicate_sources_internal)} INTERNAL DUPLICATE SOURCES IN CONFLICTING_INFO ---")
-        for source in duplicate_sources_internal:
-            print(f"   Duplicate Source: {source}")
-    
-    # Second pass: process conflicts and remove duplicates
     for conflict in conflicting_info_data:
         source_a_quote = conflict.get('source_a', {}).get('quote', '')
         source_b_quote = conflict.get('source_b', {}).get('quote', '')
@@ -809,88 +764,27 @@ def deduplicate_conflicting_quotes(conflicting_info_data, research_report):
             conflicting_sources_used.add(source_a_name)
             conflicting_sources_used.add(source_b_name)
         else:
-            print(f"--- ⚠️ REMOVING CONFLICT WITH DUPLICATES ---")
-            print(f"Source A: {source_a_name} - {source_a_quote[:50]}...")
-            print(f"Source B: {source_b_name} - {source_b_quote[:50]}...")
-            if source_a_quote in existing_quotes or source_b_quote in existing_quotes:
-                print(f"   Reason: Quote found in other sections")
-            if source_a_quote in conflicting_quotes_used or source_b_quote in conflicting_quotes_used:
-                print(f"   Reason: Quote already used in conflicting_info section")
-            if source_a_name in conflicting_sources_used or source_b_name in conflicting_sources_used:
-                print(f"   Reason: Source already used in conflicting_info section")
+            logger.warning(f"⚠️ REMOVING CONFLICT WITH DUPLICATES")
+            logger.warning(f"Source A: {source_a_name} - {source_a_quote[:50]}...")
+            logger.warning(f"Source B: {source_b_name} - {source_b_quote[:50]}...")
     
-    # Final verification: double-check for any remaining duplicates
-    final_quotes = []
-    final_sources = []
-    for conflict in unique_conflicts:
-        source_a_quote = conflict.get('source_a', {}).get('quote', '')
-        source_b_quote = conflict.get('source_b', {}).get('quote', '')
-        source_a_name = conflict.get('source_a', {}).get('name', '')
-        source_b_name = conflict.get('source_b', {}).get('name', '')
-        
-        if source_a_quote:
-            final_quotes.append(source_a_quote)
-        if source_b_quote:
-            final_quotes.append(source_b_quote)
-        if source_a_name:
-            final_sources.append(source_a_name)
-        if source_b_name:
-            final_sources.append(source_b_name)
-    
-    final_quote_duplicates = len(final_quotes) - len(set(final_quotes))
-    final_source_duplicates = len(final_sources) - len(set(final_sources))
-    
-    if final_quote_duplicates > 0 or final_source_duplicates > 0:
-        print(f"--- 🚨 WARNING: {final_quote_duplicates} DUPLICATE QUOTES AND {final_source_duplicates} DUPLICATE SOURCES STILL FOUND ---")
-        # Find and remove the duplicates
-        seen_final_quotes = set()
-        seen_final_sources = set()
-        final_unique_conflicts = []
-        
-        for conflict in unique_conflicts:
-            source_a_quote = conflict.get('source_a', {}).get('quote', '')
-            source_b_quote = conflict.get('source_b', {}).get('quote', '')
-            source_a_name = conflict.get('source_a', {}).get('name', '')
-            source_b_name = conflict.get('source_b', {}).get('name', '')
-            
-            if (source_a_quote not in seen_final_quotes and 
-                source_b_quote not in seen_final_quotes and
-                source_a_name not in seen_final_sources and 
-                source_b_name not in seen_final_sources):
-                
-                final_unique_conflicts.append(conflict)
-                seen_final_quotes.add(source_a_quote)
-                seen_final_quotes.add(source_b_quote)
-                seen_final_sources.add(source_a_name)
-                seen_final_sources.add(source_b_name)
-            else:
-                print(f"--- 🚨 FINAL REMOVAL: Conflict with duplicate quotes/sources removed ---")
-        
-        unique_conflicts = final_unique_conflicts
-        print(f"--- ✅ FINAL DEDUPLICATION: {len(unique_conflicts)} CONFLICTS RETAINED ---")
-    else:
-        print(f"--- ✅ NO DUPLICATES FOUND IN FINAL VERIFICATION ---")
-    
-    print(f"--- 📊 FINAL QUOTES USED IN CONFLICTING_INFO: {len(set(final_quotes))} ---")
-    print(f"--- 📊 FINAL SOURCES USED IN CONFLICTING_INFO: {len(set(final_sources))} ---")
+    logger.info(f"📊 FINAL QUOTES USED IN CONFLICTING_INFO: {len(set(conflicting_quotes_used))}")
+    logger.info(f"📊 FINAL SOURCES USED IN CONFLICTING_INFO: {len(set(conflicting_sources_used))}")
     return unique_conflicts
 
 def validate_conflicting_info_quotes(conflicting_info_data):
     """
     Manual validation function to check for duplicate quotes and sources in conflicting_info section.
-    Call this function to verify no duplicates exist.
     """
     if not conflicting_info_data or not isinstance(conflicting_info_data, list):
-        print("--- ❌ INVALID CONFLICTING_INFO DATA ---")
+        logger.error("❌ INVALID CONFLICTING_INFO DATA")
         return False
     
     all_quotes = []
     all_sources = []
-    quote_sources = {}  # Track which conflict each quote comes from
-    source_conflicts = {}  # Track which conflict each source comes from
     
     # Collect all quotes and sources
-    for i, conflict in enumerate(conflicting_info_data):
+    for conflict in conflicting_info_data:
         source_a_quote = conflict.get('source_a', {}).get('quote', '')
         source_b_quote = conflict.get('source_b', {}).get('quote', '')
         source_a_name = conflict.get('source_a', {}).get('name', '')
@@ -898,31 +792,12 @@ def validate_conflicting_info_quotes(conflicting_info_data):
         
         if source_a_quote:
             all_quotes.append(source_a_quote)
-            if source_a_quote in quote_sources:
-                quote_sources[source_a_quote].append(f"Conflict {i+1} - Source A")
-            else:
-                quote_sources[source_a_quote] = [f"Conflict {i+1} - Source A"]
-        
         if source_b_quote:
             all_quotes.append(source_b_quote)
-            if source_b_quote in quote_sources:
-                quote_sources[source_b_quote].append(f"Conflict {i+1} - Source B")
-            else:
-                quote_sources[source_b_quote] = [f"Conflict {i+1} - Source B"]
-        
         if source_a_name:
             all_sources.append(source_a_name)
-            if source_a_name in source_conflicts:
-                source_conflicts[source_a_name].append(f"Conflict {i+1} - Source A")
-            else:
-                source_conflicts[source_a_name] = [f"Conflict {i+1} - Source A"]
-        
         if source_b_name:
             all_sources.append(source_b_name)
-            if source_b_name in source_conflicts:
-                source_conflicts[source_b_name].append(f"Conflict {i+1} - Source B")
-            else:
-                source_conflicts[source_b_name] = [f"Conflict {i+1} - Source B"]
     
     # Check for duplicates
     unique_quotes = set(all_quotes)
@@ -931,56 +806,39 @@ def validate_conflicting_info_quotes(conflicting_info_data):
     source_duplicates = len(all_sources) - len(unique_sources)
     
     if quote_duplicates == 0 and source_duplicates == 0:
-        print(f"--- ✅ VALIDATION PASSED: No duplicate quotes or sources found in conflicting_info ---")
-        print(f"--- 📊 Total quotes: {len(all_quotes)}, Unique quotes: {len(unique_quotes)} ---")
-        print(f"--- 📊 Total sources: {len(all_sources)}, Unique sources: {len(unique_sources)} ---")
+        logger.info(f"✅ VALIDATION PASSED: No duplicate quotes or sources found in conflicting_info")
+        logger.info(f"📊 Total quotes: {len(all_quotes)}, Unique quotes: {len(unique_quotes)}")
+        logger.info(f"📊 Total sources: {len(all_sources)}, Unique sources: {len(unique_sources)}")
         return True
     else:
-        print(f"--- ❌ VALIDATION FAILED: {quote_duplicates} duplicate quotes and {source_duplicates} duplicate sources found ---")
-        
-        # Find and report the quote duplicates
-        if quote_duplicates > 0:
-            seen_quotes = set()
-            for quote in all_quotes:
-                if quote in seen_quotes:
-                    print(f"--- 🚨 DUPLICATE QUOTE FOUND ---")
-                    print(f"   Quote: {quote[:100]}...")
-                    print(f"   Used in: {quote_sources[quote]}")
-                seen_quotes.add(quote)
-        
-        # Find and report the source duplicates
-        if source_duplicates > 0:
-            seen_sources = set()
-            for source in all_sources:
-                if source in seen_sources:
-                    print(f"--- 🚨 DUPLICATE SOURCE FOUND ---")
-                    print(f"   Source: {source}")
-                    print(f"   Used in: {source_conflicts[source]}")
-                seen_sources.add(source)
-        
+        logger.error(f"❌ VALIDATION FAILED: {quote_duplicates} duplicate quotes and {source_duplicates} duplicate sources found")
         return False
 
+# Optimized writer_node with rate limit handling
 def writer_node(state: AgentState, agent_name: str):
-    print(f"--- ✍️ WRITING SECTION: {agent_name} ---")
+    """Writer node with rate limit handling."""
+    logger.info(f"✍️ Writing section: {agent_name}")
     agent = writer_agents[agent_name]
     
     # Create a message with the scraped data
     content = f"Generate the {agent_name.replace('_', ' ')} based on the following scraped content:\n\n"
     for item in state['scraped_data']:
-        content += f"URL: {item['url']}\nContent: {item['content']}\n\n"
+        content += f"URL: {item['url']}\nContent: {item['content'][:1000]}\n\n"  # Limit content to reduce tokens
     
     messages = [HumanMessage(content=content)]
     
-    result = agent.invoke({"messages": messages})
+    # Apply rate limiting to the agent invocation
+    @with_rate_limit_retry(max_retries=3, base_delay=2)
+    def invoke_agent():
+        return agent.invoke({"messages": messages})
     
-    # Log the raw response from the model
-    print(f"--- RAW RESPONSE FOR {agent_name} ---")
-    print(getattr(result, 'content', str(result)))
-    print(f"--- END RAW RESPONSE FOR {agent_name} ---")
-
     try:
-        # The result from the LLM might be a string that needs parsing.
-        # It may also be inside the 'content' attribute of an AIMessage
+        result = invoke_agent()
+        
+        # Log the raw response from the model
+        logger.info(f"Raw response for {agent_name}: {str(result)[:200]}...")
+
+        # Process the result
         if hasattr(result, 'content'):
             data_str = result.content
         else:
@@ -996,33 +854,25 @@ def writer_node(state: AgentState, agent_name: str):
         
         # Apply quote deduplication specifically for conflicting_info agent
         if agent_name == "conflicting_info":
-            print(f"--- 🔍 APPLYING QUOTE DEDUPLICATION FOR {agent_name} ---")
+            logger.info(f"🔍 Applying quote deduplication for {agent_name}")
             current_research_report = state.get('research_report', {})
             parsed_json = deduplicate_conflicting_quotes(parsed_json, current_research_report)
             
             # Final validation to ensure no duplicates remain
-            print(f"--- 🔍 FINAL VALIDATION FOR {agent_name} ---")
             validate_conflicting_info_quotes(parsed_json)
         
-        print(f"--- ✅ SECTION {agent_name} COMPLETE ---")
+        logger.info(f"✅ Section {agent_name} complete")
         return {"research_report": {agent_name: parsed_json}}
-    except (json.JSONDecodeError, AttributeError) as e:
-        # Handle parsing errors or if the content is not what we expect
+        
+    except Exception as e:
         error_message = f"Error processing {agent_name}: {e}"
-        print(f"--- ❌ ERROR IN SECTION {agent_name}: {error_message} ---")
-        # Return a message to be handled or logged
+        logger.error(error_message)
         return {"messages": [HumanMessage(content=error_message)]}
-
 
 # --- Aggregator Node ---
 def aggregator_node(state: AgentState):
-    print("---  aggregating ALL THE DATA ---")
-    # This node is a bit of a trick. The writer nodes will update the `research_report` in the state.
-    # In a real scenario, we might need a more robust way to merge partial results.
-    # For this example, we assume each writer node adds its own key to the research_report dictionary.
-    # We will just pass the state through, and the final state will have the complete report.
-    # A final validation step could be added here.
-    print("--- ✅ AGGREGATION COMPLETE ---")
+    logger.info("🔄 Aggregating all the data")
+    logger.info("✅ AGGREGATION COMPLETE")
     return {}
 
 # 4. Graph Construction
@@ -1039,22 +889,18 @@ workflow.add_node("aggregator", aggregator_node)
 workflow.add_edge(START, "researcher")
 workflow.add_edge("researcher", "scraper")
 
-# After scraping, run writer agents and image fetcher in parallel
+# After scraping, run writer agents in parallel
 for name in writer_agents.keys():
     workflow.add_edge("scraper", name)
-# workflow.add_edge("scraper", "image_fetcher") # Run image fetcher later
 
-
-# After all writers and the image fetcher are done, go to the aggregator
+# After all writers are done, go to the aggregator
 for name in writer_agents.keys():
     workflow.add_edge(name, "aggregator")
-# workflow.add_edge("image_fetcher", "aggregator")
 
 # Run the image fetcher after the cited_sources writer has completed
 workflow.add_edge("cited_sources", "image_fetcher")
 workflow.add_edge("image_fetcher", "aggregator")
 
-    
 workflow.add_edge("aggregator", END)
 
 graph = workflow.compile()
@@ -1086,13 +932,13 @@ class ResearchRequest(BaseModel):
 
 @app.post("/api/research")
 async def research(request: ResearchRequest):
-    print(f"--- 🚀 RECEIVED RESEARCH REQUEST: {request.query} ---")
+    logger.info(f"🚀 RECEIVED RESEARCH REQUEST: {request.query}")
     initial_state = {"query": request.query, "messages": [], "scraped_data": [], "research_report": {}, "image_urls": {}}
     
     final_report_data = {}
     
     # Using a single execution of the graph
-    print("--- 🔄 EXECUTING WORKFLOW ---")
+    logger.info("🔄 EXECUTING WORKFLOW")
     final_state = graph.invoke(initial_state, {"recursion_limit": 100})
     
     # Extract the research report from the final state
@@ -1110,8 +956,7 @@ async def research(request: ResearchRequest):
                 else:
                     source['image_url'] = "https://p-cdn.com/generic-source-logo.png"
 
-
-    print("--- 📝 ASSEMBLING FINAL REPORT ---")
+    logger.info("📝 ASSEMBLING FINAL REPORT")
     article_id = int(uuid.uuid4().int & (1<<31)-1)
     if 'article' in final_report_data:
         # Generate a unique slug for the article
@@ -1136,30 +981,29 @@ async def research(request: ResearchRequest):
                 final_report_data[key]['article_id'] = article_id
 
     try:
-        print("--- VALIDATING FINAL REPORT ---")
+        logger.info("VALIDATING FINAL REPORT")
         validated_report = ResearchReport.model_validate(final_report_data)
         
         # Store the full report in the cache
         report_slug = validated_report.article.slug
         report_cache[report_slug] = validated_report
         
-        print(f"--- ✅ REPORT GENERATED AND CACHED. SLUG: {report_slug} ---")
+        logger.info(f"✅ REPORT GENERATED AND CACHED. SLUG: {report_slug}")
         
         # Return only the slug to the frontend
         return {"slug": report_slug}
         
     except Exception as e:
-        print(f"--- ❌ FAILED TO GENERATE REPORT: {e} ---")
+        logger.error(f"❌ FAILED TO GENERATE REPORT: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate valid report: {e}\n\n{final_report_data}")
 
-# Update the existing /api/article/{slug} endpoint to show better messages
 @app.get("/api/article/{slug}", response_model=ResearchReport)
 async def get_article(slug: str):
-    print(f"--- 🔎 FETCHING ARTICLE WITH SLUG: {slug} ---")
+    logger.info(f"🔎 FETCHING ARTICLE WITH SLUG: {slug}")
     
     report = report_cache.get(slug)
     if not report:
-        print(f"--- ❌ ARTICLE NOT FOUND IN CACHE ---")
+        logger.error(f"❌ ARTICLE NOT FOUND IN CACHE")
         
         # Check if it's in the generation queue
         with article_generation_lock:
@@ -1174,12 +1018,119 @@ async def get_article(slug: str):
         else:
             raise HTTPException(status_code=404, detail="Article not found")
     
-    print("--- ✅ ARTICLE FOUND, RETURNING TO CLIENT ---")
+    logger.info("✅ ARTICLE FOUND, RETURNING TO CLIENT")
     return report
-# Update your existing /api/feed endpoint
-# Replace your existing /api/feed endpoint with this updated version
 
-# Add this endpoint to manually trigger cache warming
+@app.get("/api/feed")
+def get_feed():
+    """Returns hot topics as a list of articles for the frontend."""
+    logger.info("📢 /API/FEED ENDPOINT HIT")
+    
+    # Check if it's time for universal refresh
+    current_time = datetime.now()
+    current_hour = current_time.hour
+    current_minute = current_time.minute
+    
+    # Set refresh time (e.g., 2:00 AM every day)
+    REFRESH_HOUR = 2
+    REFRESH_MINUTE = 0
+    
+    # Check if it's refresh time
+    should_refresh = False
+    if (current_hour == REFRESH_HOUR and 
+        current_minute < 5 and  # 5-minute window
+        (last_server_refresh is None or 
+         current_time.date() > last_server_refresh.date())):
+        
+        should_refresh = True
+        last_server_refresh = current_time
+        logger.info(f"🔄 Server refresh triggered at {current_time}")
+        
+        # Clear the cache to force fresh data
+        report_cache.clear()
+        logger.info(f"🧹 Cache cleared - {len(report_cache)} articles removed")
+    
+    try:
+        # Try to import hot topics manager
+        from feed import hot_topics_manager
+        logger.info("SUCCESSFULLY IMPORTED HOT TOPICS MANAGER")
+        topics_data = hot_topics_manager.get_cached_topics()
+        logger.info(f"GOT TOPICS DATA: {len(topics_data.get('topics', []))} topics")
+        topics = topics_data.get('topics', [])
+        
+        # Queue article generation for topics that don't have cached articles
+        queue_article_generation(topics)
+        
+        articles = []
+        cached_count = 0
+        
+        for topic in topics:
+            # Generate slug for the topic
+            topic_slug = topic.get('headline', '').lower().replace(' ', '-').replace('"', '')
+            topic_slug = re.sub(r'[^a-z0-9-]', '', topic_slug)
+            
+            # Check if article is cached
+            is_cached = topic_slug in report_cache
+            if is_cached:
+                cached_count += 1
+            
+            # Map backend topic fields to frontend FeedArticle fields
+            article = {
+                "id": topic.get("id", str(uuid.uuid4())),
+                "title": topic.get("headline", "Untitled Topic"),
+                "slug": topic_slug,
+                "excerpt": topic.get("description", "No description available."),
+                "category": topic.get("category", "General"),
+                "publishedAt": topic.get("generated_at", datetime.now().isoformat()),
+                "readTime": 2,
+                "sourceCount": 1,
+                "heroImageUrl": topic.get("image_url", "https://images.pexels.com/photos/12345/news-image.jpg"),
+                "authorName": "AI Agent",
+                "authorTitle": "Hot Topics Generator",
+                "cached": is_cached  # Add cache status to each article
+            }
+            articles.append(article)
+        
+        logger.info(f"RETURNING {len(articles)} ARTICLES ({cached_count} CACHED)")
+        logger.info(f"TOTAL CACHED ARTICLES: {len(report_cache)}")
+        
+        # Return just the articles array (for frontend compatibility)
+        return articles
+        
+    except Exception as e:
+        logger.error(f"Error getting hot topics: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Fallback to sample topics if the hot topics manager fails
+        fallback_topic = {
+            "id": str(uuid.uuid4()),
+            "title": "AI Breakthrough: New Language Model Shows Human-Level Understanding",
+            "slug": "ai-breakthrough-new-language-model-shows-human-level-understanding",
+            "excerpt": "Researchers have developed a new AI model that demonstrates unprecedented understanding of complex human language patterns.",
+            "category": "Technology",
+            "publishedAt": datetime.now().isoformat(),
+            "readTime": 3,
+            "sourceCount": 5,
+            "heroImageUrl": "https://images.pexels.com/photos/8386434/pexels-photo-8386434.jpeg",
+            "authorName": "AI Agent",
+            "authorTitle": "Tech Analyst",
+            "cached": False
+        }
+        
+        # Queue the fallback topic for article generation
+        queue_article_generation([{
+            "headline": fallback_topic["title"],
+            "description": fallback_topic["excerpt"],
+            "category": fallback_topic["category"],
+            "generated_at": fallback_topic["publishedAt"],
+            "image_url": fallback_topic["heroImageUrl"],
+            "slug": fallback_topic["slug"]
+        }])
+        
+        return [fallback_topic]
+
+# Monitoring and control endpoints
 @app.post("/api/warm-cache")
 async def warm_cache():
     """Manually trigger article generation for all feed topics."""
@@ -1201,10 +1152,9 @@ async def warm_cache():
         }
         
     except Exception as e:
-        print(f"--- ❌ ERROR IN CACHE WARMING: {e} ---")
+        logger.error(f"❌ ERROR IN CACHE WARMING: {e}")
         raise HTTPException(status_code=500, detail=f"Error warming cache: {str(e)}")
 
-# Add this endpoint to check cache status
 @app.get("/api/cache-status")
 def get_cache_status():
     """Get the current cache status."""
@@ -1245,7 +1195,7 @@ def get_cache_status():
         }
         
     except Exception as e:
-        print(f"--- ❌ ERROR GETTING CACHE STATUS: {e} ---")
+        logger.error(f"❌ ERROR GETTING CACHE STATUS: {e}")
         return {
             "total_topics": 0,
             "cached_articles": len(report_cache),
@@ -1256,123 +1206,6 @@ def get_cache_status():
             "error": str(e)
         }
 
-# Replace your existing /api/feed endpoint with this updated version
-
-@app.get("/api/feed")
-def get_feed():
-    """Returns hot topics as a list of articles for the frontend."""
-    print("--- 📢 /API/FEED ENDPOINT HIT ---")
-    
-    # Check if it's time for universal refresh
-    current_time = datetime.now()
-    current_hour = current_time.hour
-    current_minute = current_time.minute
-    
-    # Set refresh time (e.g., 2:00 AM every day)
-    REFRESH_HOUR = 2
-    REFRESH_MINUTE = 0
-    
-    # Check if it's refresh time
-    should_refresh = False
-    if (current_hour == REFRESH_HOUR and 
-        current_minute < 5 and  # 5-minute window
-        (last_server_refresh is None or 
-         current_time.date() > last_server_refresh.date())):
-        
-        should_refresh = True
-        last_server_refresh = current_time
-        print(f"🔄 Server refresh triggered at {current_time}")
-        
-        # Clear the cache to force fresh data
-        report_cache.clear()
-        print(f"🧹 Cache cleared - {len(report_cache)} articles removed")
-    
-    try:
-        # Try to import hot topics manager
-        from feed import hot_topics_manager
-        print("--- SUCCESSFULLY IMPORTED HOT TOPICS MANAGER ---")
-        topics_data = hot_topics_manager.get_cached_topics()
-        print(f"--- GOT TOPICS DATA: {len(topics_data.get('topics', []))} topics ---")
-        topics = topics_data.get('topics', [])
-        
-        # Queue article generation for topics that don't have cached articles
-        queue_article_generation(topics)
-        
-        articles = []
-        cached_count = 0
-        
-        for topic in topics:
-            # Generate slug for the topic
-            topic_slug = topic.get('headline', '').lower().replace(' ', '-').replace('"', '')
-            topic_slug = re.sub(r'[^a-z0-9-]', '', topic_slug)
-            
-            # Check if article is cached
-            is_cached = topic_slug in report_cache
-            if is_cached:
-                cached_count += 1
-            
-            # Map backend topic fields to frontend FeedArticle fields
-            article = {
-                "id": topic.get("id", str(uuid.uuid4())),
-                "title": topic.get("headline", "Untitled Topic"),
-                "slug": topic_slug,
-                "excerpt": topic.get("description", "No description available."),
-                "category": topic.get("category", "General"),
-                "publishedAt": topic.get("generated_at", datetime.now().isoformat()),
-                "readTime": 2,
-                "sourceCount": 1,
-                "heroImageUrl": topic.get("image_url", "https://images.pexels.com/photos/12345/news-image.jpg"),
-                "authorName": "AI Agent",
-                "authorTitle": "Hot Topics Generator",
-                "cached": is_cached  # Add cache status to each article
-            }
-            articles.append(article)
-        
-        print(f"--- RETURNING {len(articles)} ARTICLES ({cached_count} CACHED) ---")
-        print(f"--- TOTAL CACHED ARTICLES: {len(report_cache)} ---")
-        
-        # Add cache statistics to the response
-        with article_generation_lock:
-            queue_length = len(article_generation_queue)
-            is_generating = is_generating_articles
-        
-        # Return just the articles array (for frontend compatibility)
-        return articles
-        
-    except Exception as e:
-        print(f"Error getting hot topics: {e}")
-        import traceback
-        traceback.print_exc()
-        
-        # Fallback to sample topics if the hot topics manager fails
-        fallback_topic = {
-            "id": str(uuid.uuid4()),
-            "title": "AI Breakthrough: New Language Model Shows Human-Level Understanding",
-            "slug": "ai-breakthrough-new-language-model-shows-human-level-understanding",
-            "excerpt": "Researchers have developed a new AI model that demonstrates unprecedented understanding of complex human language patterns.",
-            "category": "Technology",
-            "publishedAt": datetime.now().isoformat(),
-            "readTime": 3,
-            "sourceCount": 5,
-            "heroImageUrl": "https://images.pexels.com/photos/8386434/pexels-photo-8386434.jpeg",
-            "authorName": "AI Agent",
-            "authorTitle": "Tech Analyst",
-            "cached": False
-        }
-        
-        # Queue the fallback topic for article generation
-        queue_article_generation([{
-            "headline": fallback_topic["title"],
-            "description": fallback_topic["excerpt"],
-            "category": fallback_topic["category"],
-            "generated_at": fallback_topic["publishedAt"],
-            "image_url": fallback_topic["heroImageUrl"],
-            "slug": fallback_topic["slug"]
-        }])
-        
-        return [fallback_topic]
-
-# Add endpoint to check article generation status
 @app.get("/api/article-generation-status")
 def get_article_generation_status():
     """Get the status of article generation."""
@@ -1384,7 +1217,6 @@ def get_article_generation_status():
             "queued_topics": [topic.get('headline', 'Unknown') for topic in article_generation_queue]
         }
 
-# Add endpoint to manually trigger article generation for a specific topic
 @app.post("/api/generate-article-for-topic")
 async def generate_article_for_topic_endpoint(request: dict):
     """Manually trigger article generation for a specific topic."""
@@ -1417,10 +1249,75 @@ async def generate_article_for_topic_endpoint(request: dict):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"--- ❌ ERROR IN MANUAL ARTICLE GENERATION: {e} ---")
+        logger.error(f"❌ ERROR IN MANUAL ARTICLE GENERATION: {e}")
         raise HTTPException(status_code=500, detail=f"Error generating article: {str(e)}")
 
+@app.get("/api/rate-limit-status")
+async def get_rate_limit_status():
+    """Get current rate limiting status."""
+    with article_generation_lock:
+        return {
+            "queue_length": len(article_generation_queue),
+            "is_generating": is_generating_articles,
+            "cached_articles": len(report_cache),
+            "worker_count": executor._max_workers,
+            "current_model": "gpt-4o-mini",
+            "rate_limit_strategy": "sequential_with_backoff"
+        }
 
+@app.post("/api/pause-generation")
+async def pause_generation():
+    """Pause article generation."""
+    global is_generating_articles
+    
+    with article_generation_lock:
+        was_generating = is_generating_articles
+        is_generating_articles = False
+    
+    return {
+        "message": "Article generation paused",
+        "was_generating": was_generating,
+        "queue_length": len(article_generation_queue)
+    }
+
+@app.post("/api/resume-generation")
+async def resume_generation():
+    """Resume article generation."""
+    if article_generation_queue and not is_generating_articles:
+        executor.submit(process_article_generation_queue)
+        return {"message": "Article generation resumed"}
+    else:
+        return {"message": "No articles to generate or already generating"}
+
+@app.post("/api/reset-rate-limits")
+async def reset_rate_limits():
+    """Emergency endpoint to pause generation and reset rate limits."""
+    global is_generating_articles, article_generation_queue
+    
+    with article_generation_lock:
+        queue_length = len(article_generation_queue)
+        is_generating_articles = False
+        # Optionally clear the queue: article_generation_queue.clear()
+    
+    logger.info("🛑 Rate limit reset triggered - pausing generation")
+    
+    return {
+        "message": "Generation paused to reset rate limits",
+        "queue_length": queue_length,
+        "recommendation": "Wait 60 seconds before resuming"
+    }
+
+@app.get("/api/health")
+async def health_check():
+    """Health check with rate limit status."""
+    with article_generation_lock:
+        return {
+            "status": "healthy",
+            "cached_articles": len(report_cache),
+            "queue_length": len(article_generation_queue),
+            "is_generating": is_generating_articles,
+            "rate_limit_status": "monitoring"
+        }
 
 @app.get("/")
 def read_root():
@@ -1447,11 +1344,11 @@ async def get_server_time():
         
         should_refresh = True
         last_server_refresh = current_time
-        print(f"🔄 Server refresh triggered at {current_time}")
+        logger.info(f"🔄 Server refresh triggered at {current_time}")
         
         # Clear the cache to force fresh data
         report_cache.clear()
-        print(f"🧹 Cache cleared - {len(report_cache)} articles removed")
+        logger.info(f"🧹 Cache cleared - {len(report_cache)} articles removed")
     
     return {
         "timestamp": current_time.isoformat(),
@@ -1463,4 +1360,4 @@ async def get_server_time():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8000) to identify at least 2 different conflicts when they exist. If no conflicts are found, return an empty array [].
