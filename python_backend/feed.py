@@ -434,6 +434,7 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         
         # Your Vercel domains
+        "https://timio-web-ai.vercel.app",  # ✅ NEW DOMAIN ADDED
         "https://timio-web-ai-klcl.vercel.app",
         "https://timio-web-ai-three.vercel.app",
         "https://web-ai-dze2.vercel.app",
