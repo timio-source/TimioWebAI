@@ -1,10 +1,10 @@
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Clock, TrendingUp, Eye, ArrowRight, Search, Settings, Zap } from "lucide-react";
+import { Clock, TrendingUp, Eye, ArrowRight, Search, Settings, Zap, RefreshCw } from "lucide-react";
 import { useLocation } from "wouter";
 import { ThemeController } from "@/components/theme-controller";
 import { useTheme } from "@/hooks/use-theme";
@@ -16,7 +16,7 @@ import timioLogo from "@assets/App Icon_1751662407764.png";
 import chromeIcon from "@assets/Google_Chrome_Web_Store_icon_2015 (2)_1751671046716.png";
 
 interface FeedArticle {
-  id: number;
+  id: string;
   title: string;
   slug: string;
   excerpt: string;
@@ -30,9 +30,17 @@ interface FeedArticle {
 }
 
 export default function FeedPage() {
-  const { data: articles, isLoading } = useQuery<FeedArticle[]>({
+  const queryClient = useQueryClient();
+  
+  // Fetch articles with better error handling and retry logic
+  const { data: articles, isLoading, error, refetch } = useQuery<FeedArticle[]>({
     queryKey: ['api/feed'],
+    retry: 2,
+    retryDelay: 1000,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    refetchOnWindowFocus: false,
   });
+
   const [showThemeController, setShowThemeController] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [, setLocation] = useLocation();
@@ -56,6 +64,35 @@ export default function FeedPage() {
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
+  // Manual refresh mutation for generating new topics
+  const refreshTopicsMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "api/force-generate-topics", {});
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`${response.status}: ${errorText}`);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      // Invalidate and refetch the feed
+      queryClient.invalidateQueries({ queryKey: ['api/feed'] });
+      toast({
+        title: "Topics Refreshed",
+        description: "New important news topics have been generated.",
+      });
+    },
+    onError: (error) => {
+      console.error("Failed to refresh topics:", error);
+      toast({
+        title: "Refresh Failed",
+        description: "Unable to generate new topics. Please try again.",
+        variant: "destructive",
+      });
+    }
+  });
+
+  // Research mutation with improved error handling
   const researchMutation = useMutation({
     mutationFn: async (query: string) => {
       try {
@@ -92,11 +129,11 @@ export default function FeedPage() {
 
   const handleSearch = () => {
     if (searchQuery.trim()) {
-      // Save search query to localStorage for persistence (for both dummy and real modes)
+      // Save search query to localStorage for persistence
       localStorage.setItem('searchQuery', searchQuery);
       
       if (useDummyMode) {
-        // If dummy mode is enabled, navigate directly to the dummy article without any API calls
+        // If dummy mode is enabled, navigate directly to the dummy article
         setLocation('/article/one-big-beautiful-bill-trump-2025');
         return;
       }
@@ -124,6 +161,10 @@ export default function FeedPage() {
     
     // Navigate to research loading page which will handle the research
     setLocation('/research-loading');
+  };
+
+  const handleRefreshTopics = () => {
+    refreshTopicsMutation.mutate();
   };
 
   if (isLoading) {
@@ -212,6 +253,16 @@ export default function FeedPage() {
               <Button
                 variant="outline"
                 size="sm"
+                onClick={handleRefreshTopics}
+                disabled={refreshTopicsMutation.isPending}
+                className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-4 min-h-[32px] sm:min-h-[36px] touch-manipulation"
+              >
+                <RefreshCw className={`h-3 w-3 sm:h-4 sm:w-4 ${refreshTopicsMutation.isPending ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">Refresh</span>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setShowThemeController(!showThemeController)}
                 className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-4 min-h-[32px] sm:min-h-[36px] touch-manipulation"
               >
@@ -271,13 +322,48 @@ export default function FeedPage() {
 
             {/* Page Header */}
             <div className="mb-6 sm:mb-8 px-4 sm:px-0">
-              <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold theme-header-text mb-2">
-                Today's News Reports
-              </h1>
-              <p className="text-base sm:text-lg theme-tagline-text">
-                AI Driven Research on popular stories
-              </p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold theme-header-text mb-2">
+                    Today's Important News
+                  </h1>
+                  <p className="text-base sm:text-lg theme-tagline-text">
+                    AI curated important stories - Politics, Technology, Business, Health & Global Affairs
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={() => refetch()}
+                  disabled={isLoading}
+                  className="hidden sm:flex items-center gap-2"
+                >
+                  <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+                  Reload
+                </Button>
+              </div>
             </div>
+
+            {/* Error State */}
+            {error && (
+              <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-red-800 font-medium">Unable to load news topics</h3>
+                    <p className="text-red-600 text-sm mt-1">
+                      There was an issue connecting to the news service. Please try again.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => refetch()}
+                    className="text-red-600 border-red-200 hover:bg-red-50"
+                  >
+                    Retry
+                  </Button>
+                </div>
+              </div>
+            )}
 
             {/* Articles Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 px-4 sm:px-0">
@@ -290,6 +376,10 @@ export default function FeedPage() {
                         alt={article.title}
                         className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-200"
                         loading="lazy"
+                        onError={(e) => {
+                          // Fallback image if original fails to load
+                          e.currentTarget.src = "https://images.pexels.com/photos/518543/pexels-photo-518543.jpeg";
+                        }}
                       />
                       {/* Semitransparent mask */}
                       <div className="absolute inset-0 bg-black bg-opacity-40"></div>
@@ -366,8 +456,18 @@ export default function FeedPage() {
                 <div className="text-gray-400 mb-4">
                   <TrendingUp className="h-16 w-16 mx-auto" />
                 </div>
-                <h3 className="text-xl font-semibold text-gray-900 mb-2">No articles found</h3>
-                <p className="text-gray-600">Check back later for the latest AI news and updates.</p>
+                <h3 className="text-xl font-semibold text-gray-900 mb-2">No important news topics found</h3>
+                <p className="text-gray-600 mb-4">
+                  Our AI is currently generating fresh important news topics. This may take a moment.
+                </p>
+                <Button
+                  onClick={handleRefreshTopics}
+                  disabled={refreshTopicsMutation.isPending}
+                  className="flex items-center gap-2"
+                >
+                  <RefreshCw className={`h-4 w-4 ${refreshTopicsMutation.isPending ? 'animate-spin' : ''}`} />
+                  {refreshTopicsMutation.isPending ? 'Generating...' : 'Generate Topics'}
+                </Button>
               </div>
             )}
           </div>
@@ -379,6 +479,10 @@ export default function FeedPage() {
                 src="/asseen-on.png" 
                 alt="As seen on PBS and Automateed" 
                 className="w-full h-auto rounded-lg shadow-lg"
+                onError={(e) => {
+                  // Hide image if it fails to load
+                  e.currentTarget.style.display = 'none';
+                }}
               />
               <a 
                 href="https://timio.news" 
