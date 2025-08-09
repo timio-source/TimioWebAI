@@ -31,7 +31,7 @@ interface FeedArticle {
 
 export default function FeedPage() {
   const { data: articles, isLoading } = useQuery<FeedArticle[]>({
-    queryKey: ['/api/feed'],
+    queryKey: ['api/feed'],
   });
   const [showThemeController, setShowThemeController] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
