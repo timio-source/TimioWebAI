@@ -1,8 +1,13 @@
+
 import os
 import re
 import json
 import uuid
+import asyncio
+import threading
+import time
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -23,13 +28,17 @@ from schemas import ResearchReport
 
 load_dotenv()
 
-# --- In-Memory Cache ---
-# A simple dictionary to store generated reports by slug
+# --- Global Variables ---
+# In-Memory Cache - A simple dictionary to store generated reports by slug
 report_cache: Dict[str, ResearchReport] = {}
 
-# Add this after the existing global variables
+# Server refresh tracking
 last_server_refresh = None
 
+# Article Generation Queue
+article_generation_queue = []
+article_generation_lock = threading.Lock()
+is_generating_articles = False
 # --- Pexels Tool ---
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 if PEXELS_API_KEY:
@@ -987,17 +996,31 @@ async def research(request: ResearchRequest):
         print(f"--- ❌ FAILED TO GENERATE REPORT: {e} ---")
         raise HTTPException(status_code=500, detail=f"Failed to generate valid report: {e}\n\n{final_report_data}")
 
+# Update the existing /api/article/{slug} endpoint to show better messages
 @app.get("/api/article/{slug}", response_model=ResearchReport)
 async def get_article(slug: str):
     print(f"--- 🔎 FETCHING ARTICLE WITH SLUG: {slug} ---")
+    
     report = report_cache.get(slug)
     if not report:
         print(f"--- ❌ ARTICLE NOT FOUND IN CACHE ---")
-        raise HTTPException(status_code=404, detail="Article not found")
+        
+        # Check if it's in the generation queue
+        with article_generation_lock:
+            queued_headlines = [topic.get('headline', '') for topic in article_generation_queue]
+            is_queued = any(slug in headline.lower().replace(' ', '-') for headline in queued_headlines)
+        
+        if is_queued:
+            raise HTTPException(
+                status_code=202, 
+                detail="Article is being generated. Please try again in a few moments."
+            )
+        else:
+            raise HTTPException(status_code=404, detail="Article not found")
     
     print("--- ✅ ARTICLE FOUND, RETURNING TO CLIENT ---")
     return report
-
+# Update your existing /api/feed endpoint
 @app.get("/api/feed")
 def get_feed():
     """Returns hot topics as a list of articles for the frontend."""
@@ -1034,13 +1057,21 @@ def get_feed():
         topics_data = hot_topics_manager.get_cached_topics()
         print(f"--- GOT TOPICS DATA: {len(topics_data.get('topics', []))} topics ---")
         topics = topics_data.get('topics', [])
+        
+        # Queue article generation for topics that don't have cached articles
+        queue_article_generation(topics)
+        
         articles = []
         for topic in topics:
+            # Generate slug for the topic
+            topic_slug = topic.get('headline', '').lower().replace(' ', '-').replace('"', '')
+            topic_slug = re.sub(r'[^a-z0-9-]', '', topic_slug)
+            
             # Map backend topic fields to frontend FeedArticle fields
             article = {
                 "id": topic.get("id", str(uuid.uuid4())),
                 "title": topic.get("headline", "Untitled Topic"),
-                "slug": topic.get("headline", "untitled-topic").lower().replace(" ", "-").replace("/", "-"),
+                "slug": topic_slug,  # Use the generated slug
                 "excerpt": topic.get("description", "No description available."),
                 "category": topic.get("category", "General"),
                 "publishedAt": topic.get("generated_at", datetime.now().isoformat()),
@@ -1051,28 +1082,91 @@ def get_feed():
                 "authorTitle": "Hot Topics Generator"
             }
             articles.append(article)
+        
         print(f"--- RETURNING {len(articles)} ARTICLES ---")
+        print(f"--- CACHED ARTICLES COUNT: {len(report_cache)} ---")
         return articles
+        
     except Exception as e:
         print(f"Error getting hot topics: {e}")
         import traceback
         traceback.print_exc()
         # Fallback to sample topics if the hot topics manager fails
-        return [
-            {
-                "id": str(uuid.uuid4()),
-                "title": "AI Breakthrough: New Language Model Shows Human-Level Understanding",
-                "slug": "ai-breakthrough-new-language-model-shows-human-level-understanding",
-                "excerpt": "Researchers have developed a new AI model that demonstrates unprecedented understanding of complex human language patterns.",
-                "category": "Technology",
-                "publishedAt": datetime.now().isoformat(),
-                "readTime": 3,
-                "sourceCount": 5,
-                "heroImageUrl": "https://images.pexels.com/photos/8386434/pexels-photo-8386434.jpeg",
-                "authorName": "AI Agent",
-                "authorTitle": "Tech Analyst"
+        fallback_topic = {
+            "id": str(uuid.uuid4()),
+            "title": "AI Breakthrough: New Language Model Shows Human-Level Understanding",
+            "slug": "ai-breakthrough-new-language-model-shows-human-level-understanding",
+            "excerpt": "Researchers have developed a new AI model that demonstrates unprecedented understanding of complex human language patterns.",
+            "category": "Technology",
+            "publishedAt": datetime.now().isoformat(),
+            "readTime": 3,
+            "sourceCount": 5,
+            "heroImageUrl": "https://images.pexels.com/photos/8386434/pexels-photo-8386434.jpeg",
+            "authorName": "AI Agent",
+            "authorTitle": "Tech Analyst"
+        }
+        
+        # Queue the fallback topic for article generation
+        queue_article_generation([{
+            "headline": fallback_topic["title"],
+            "description": fallback_topic["excerpt"],
+            "category": fallback_topic["category"],
+            "generated_at": fallback_topic["publishedAt"],
+            "image_url": fallback_topic["heroImageUrl"],
+            "slug": fallback_topic["slug"]
+        }])
+        
+        return [fallback_topic]
+
+# Add endpoint to check article generation status
+@app.get("/api/article-generation-status")
+def get_article_generation_status():
+    """Get the status of article generation."""
+    with article_generation_lock:
+        return {
+            "queue_length": len(article_generation_queue),
+            "is_generating": is_generating_articles,
+            "cached_articles": len(report_cache),
+            "queued_topics": [topic.get('headline', 'Unknown') for topic in article_generation_queue]
+        }
+
+# Add endpoint to manually trigger article generation for a specific topic
+@app.post("/api/generate-article-for-topic")
+async def generate_article_for_topic_endpoint(request: dict):
+    """Manually trigger article generation for a specific topic."""
+    try:
+        topic_headline = request.get('headline') or request.get('title', '')
+        if not topic_headline:
+            raise HTTPException(status_code=400, detail="Headline or title is required")
+        
+        # Create topic data structure
+        topic_data = {
+            "headline": topic_headline,
+            "description": request.get('description', ''),
+            "category": request.get('category', 'General'),
+            "generated_at": datetime.now().isoformat(),
+            "image_url": request.get('image_url', 'https://images.pexels.com/photos/12345/news-image.jpg')
+        }
+        
+        # Generate article immediately (not in background)
+        slug = await generate_article_for_topic(topic_data)
+        
+        if slug:
+            return {
+                "success": True,
+                "slug": slug,
+                "message": f"Article generated successfully for: {topic_headline}"
             }
-        ]
+        else:
+            raise HTTPException(status_code=500, detail="Failed to generate article")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"--- ❌ ERROR IN MANUAL ARTICLE GENERATION: {e} ---")
+        raise HTTPException(status_code=500, detail=f"Error generating article: {str(e)}")
+
+
 
 @app.get("/")
 def read_root():
