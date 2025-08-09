@@ -35,10 +35,241 @@ report_cache: Dict[str, ResearchReport] = {}
 # Server refresh tracking
 last_server_refresh = None
 
+executor = ThreadPoolExecutor(max_workers=2)  # Limit concurrent article generation
+
 # Article Generation Queue
 article_generation_queue = []
 article_generation_lock = threading.Lock()
 is_generating_articles = False
+
+def queue_article_generation(topics):
+    """Add topics to the article generation queue if they don't have cached articles."""
+    global article_generation_queue, is_generating_articles
+    
+    with article_generation_lock:
+        for topic in topics:
+            # Generate slug for the topic
+            topic_slug = topic.get('headline', '').lower().replace(' ', '-').replace('"', '')
+            topic_slug = re.sub(r'[^a-z0-9-]', '', topic_slug)
+            
+            # Check if article is already cached
+            if topic_slug not in report_cache:
+                # Check if already in queue
+                already_queued = any(
+                    existing_topic.get('slug') == topic_slug 
+                    for existing_topic in article_generation_queue
+                )
+                
+                if not already_queued:
+                    topic['slug'] = topic_slug
+                    article_generation_queue.append(topic)
+                    print(f"--- 📝 QUEUED ARTICLE GENERATION FOR: {topic.get('headline', 'Unknown')} ---")
+    
+    # Start background generation if not already running
+    if not is_generating_articles and article_generation_queue:
+        print("--- 🚀 STARTING BACKGROUND ARTICLE GENERATION ---")
+        executor.submit(process_article_generation_queue)
+
+def process_article_generation_queue():
+    """Process articles in the generation queue."""
+    global is_generating_articles, article_generation_queue
+    
+    with article_generation_lock:
+        if is_generating_articles:
+            return  # Already processing
+        is_generating_articles = True
+    
+    try:
+        while True:
+            with article_generation_lock:
+                if not article_generation_queue:
+                    break
+                topic = article_generation_queue.pop(0)
+            
+            print(f"--- 🔄 GENERATING ARTICLE FOR: {topic.get('headline', 'Unknown')} ---")
+            
+            # Use asyncio to run the async function
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                slug = loop.run_until_complete(generate_article_for_topic(topic))
+                if slug:
+                    print(f"--- ✅ ARTICLE GENERATED AND CACHED: {slug} ---")
+                else:
+                    print(f"--- ❌ FAILED TO GENERATE ARTICLE FOR: {topic.get('headline', 'Unknown')} ---")
+            finally:
+                loop.close()
+            
+            # Small delay between generations to avoid overwhelming the system
+            time.sleep(2)
+    
+    except Exception as e:
+        print(f"--- ❌ ERROR IN BACKGROUND ARTICLE GENERATION: {e} ---")
+    
+    finally:
+        with article_generation_lock:
+            is_generating_articles = False
+        print("--- 🏁 BACKGROUND ARTICLE GENERATION COMPLETED ---")
+
+async def generate_article_for_topic(topic):
+    """Generate an article for a specific topic and cache it."""
+    try:
+        topic_headline = topic.get('headline', '')
+        topic_slug = topic.get('slug', '')
+        
+        if not topic_headline:
+            print("--- ❌ NO HEADLINE PROVIDED FOR TOPIC ---")
+            return None
+        
+        # Check if article is already cached
+        if topic_slug in report_cache:
+            print(f"--- ✅ ARTICLE ALREADY CACHED: {topic_slug} ---")
+            return topic_slug
+        
+        print(f"--- 🔬 STARTING RESEARCH FOR: {topic_headline} ---")
+        
+        # Create initial state for the research workflow
+        initial_state = {
+            "query": topic_headline,
+            "messages": [],
+            "scraped_data": [],
+            "research_report": {},
+            "image_urls": {}
+        }
+        
+        # Execute the research workflow
+        final_state = graph.invoke(initial_state, {"recursion_limit": 100})
+        
+        # Extract the research report from the final state
+        final_report_data = {}
+        if final_state and 'research_report' in final_state:
+            final_report_data = final_state['research_report']
+        
+        # Merge image URLs into the final report
+        if final_state and 'image_urls' in final_state and final_state['image_urls']:
+            if 'article' in final_report_data:
+                final_report_data['article']['hero_image_url'] = final_state['image_urls']['hero_image']
+            if 'cited_sources' in final_report_data and final_state['image_urls']['source_images']:
+                for i, source in enumerate(final_report_data['cited_sources']):
+                    if i < len(final_state['image_urls']['source_images']):
+                        source['image_url'] = final_state['image_urls']['source_images'][i]
+                    else:
+                        source['image_url'] = "https://p-cdn.com/generic-source-logo.png"
+        
+        # Assemble final report
+        article_id = int(uuid.uuid4().int & (1<<31)-1)
+        if 'article' in final_report_data:
+            final_report_data['article']['slug'] = topic_slug
+            final_report_data['article']['id'] = article_id
+            final_report_data['article']['read_time'] = 5
+            final_report_data['article']['source_count'] = len(final_state.get('scraped_data', []))
+            final_report_data['article']['published_at'] = topic.get('generated_at', datetime.now().isoformat())
+            final_report_data['article']['category'] = topic.get('category', 'Research')
+            final_report_data['article']['author_name'] = "AI Agent"
+            final_report_data['article']['author_title'] = "Research Specialist"
+            
+            # Use the topic's image if available
+            if topic.get('image_url') and 'hero_image_url' not in final_report_data['article']:
+                final_report_data['article']['hero_image_url'] = topic['image_url']
+        
+        # Add article_id to all sections
+        for key in ['executive_summary', 'timeline_items', 'cited_sources', 'raw_facts', 'perspectives', 'conflicting_info']:
+            if key in final_report_data:
+                if isinstance(final_report_data[key], list):
+                    for item in final_report_data[key]:
+                        item['article_id'] = article_id
+                else:
+                    final_report_data[key]['article_id'] = article_id
+        
+        # Validate and cache the report
+        validated_report = ResearchReport.model_validate(final_report_data)
+        report_cache[topic_slug] = validated_report
+        
+        print(f"--- ✅ ARTICLE GENERATED AND CACHED: {topic_slug} ---")
+        return topic_slug
+        
+    except Exception as e:
+        print(f"--- ❌ ERROR GENERATING ARTICLE FOR {topic.get('headline', 'Unknown')}: {e} ---")
+        import traceback
+        traceback.print_exc()
+        return None
+
+# Add this endpoint to manually trigger cache warming
+@app.post("/api/warm-cache")
+async def warm_cache():
+    """Manually trigger article generation for all feed topics."""
+    try:
+        from feed import hot_topics_manager
+        topics_data = hot_topics_manager.get_cached_topics()
+        topics = topics_data.get('topics', [])
+        
+        if not topics:
+            return {"message": "No topics found to generate articles for", "count": 0}
+        
+        # Queue all topics for generation
+        queue_article_generation(topics)
+        
+        return {
+            "message": f"Queued {len(topics)} topics for article generation",
+            "count": len(topics),
+            "topics": [topic.get('headline', 'Unknown') for topic in topics]
+        }
+        
+    except Exception as e:
+        print(f"--- ❌ ERROR IN CACHE WARMING: {e} ---")
+        raise HTTPException(status_code=500, detail=f"Error warming cache: {str(e)}")
+
+# Add this endpoint to check cache status
+@app.get("/api/cache-status")
+def get_cache_status():
+    """Get the current cache status."""
+    try:
+        from feed import hot_topics_manager
+        topics_data = hot_topics_manager.get_cached_topics()
+        topics = topics_data.get('topics', [])
+        
+        cached_count = 0
+        topic_status = []
+        
+        for topic in topics:
+            topic_slug = topic.get('headline', '').lower().replace(' ', '-').replace('"', '')
+            topic_slug = re.sub(r'[^a-z0-9-]', '', topic_slug)
+            
+            is_cached = topic_slug in report_cache
+            if is_cached:
+                cached_count += 1
+            
+            topic_status.append({
+                "headline": topic.get('headline', 'Unknown'),
+                "slug": topic_slug,
+                "cached": is_cached
+            })
+        
+        with article_generation_lock:
+            queue_length = len(article_generation_queue)
+            is_generating = is_generating_articles
+        
+        return {
+            "total_topics": len(topics),
+            "cached_articles": cached_count,
+            "uncached_articles": len(topics) - cached_count,
+            "cache_percentage": (cached_count / len(topics) * 100) if topics else 0,
+            "queue_length": queue_length,
+            "is_generating": is_generating,
+            "topic_status": topic_status
+        }
+        
+    except Exception as e:
+        print(f"--- ❌ ERROR GETTING CACHE STATUS: {e} ---")
+        return {
+            "total_topics": 0,
+            "cached_articles": len(report_cache),
+            "uncached_articles": 0,
+            "cache_percentage": 0,
+            "queue_length": 0,
+            "is_generating": False,
+            "error": str(e)
+        }
 # --- Pexels Tool ---
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 if PEXELS_API_KEY:
@@ -1021,6 +1252,8 @@ async def get_article(slug: str):
     print("--- ✅ ARTICLE FOUND, RETURNING TO CLIENT ---")
     return report
 # Update your existing /api/feed endpoint
+# Replace your existing /api/feed endpoint with this updated version
+
 @app.get("/api/feed")
 def get_feed():
     """Returns hot topics as a list of articles for the frontend."""
@@ -1062,16 +1295,23 @@ def get_feed():
         queue_article_generation(topics)
         
         articles = []
+        cached_count = 0
+        
         for topic in topics:
             # Generate slug for the topic
             topic_slug = topic.get('headline', '').lower().replace(' ', '-').replace('"', '')
             topic_slug = re.sub(r'[^a-z0-9-]', '', topic_slug)
             
+            # Check if article is cached
+            is_cached = topic_slug in report_cache
+            if is_cached:
+                cached_count += 1
+            
             # Map backend topic fields to frontend FeedArticle fields
             article = {
                 "id": topic.get("id", str(uuid.uuid4())),
                 "title": topic.get("headline", "Untitled Topic"),
-                "slug": topic_slug,  # Use the generated slug
+                "slug": topic_slug,
                 "excerpt": topic.get("description", "No description available."),
                 "category": topic.get("category", "General"),
                 "publishedAt": topic.get("generated_at", datetime.now().isoformat()),
@@ -1079,18 +1319,36 @@ def get_feed():
                 "sourceCount": 1,
                 "heroImageUrl": topic.get("image_url", "https://images.pexels.com/photos/12345/news-image.jpg"),
                 "authorName": "AI Agent",
-                "authorTitle": "Hot Topics Generator"
+                "authorTitle": "Hot Topics Generator",
+                "cached": is_cached  # Add cache status to each article
             }
             articles.append(article)
         
-        print(f"--- RETURNING {len(articles)} ARTICLES ---")
-        print(f"--- CACHED ARTICLES COUNT: {len(report_cache)} ---")
-        return articles
+        print(f"--- RETURNING {len(articles)} ARTICLES ({cached_count} CACHED) ---")
+        print(f"--- TOTAL CACHED ARTICLES: {len(report_cache)} ---")
+        
+        # Add cache statistics to the response
+        with article_generation_lock:
+            queue_length = len(article_generation_queue)
+            is_generating = is_generating_articles
+        
+        # Return articles with cache metadata
+        return {
+            "articles": articles,
+            "cache_stats": {
+                "total_articles": len(articles),
+                "cached_articles": cached_count,
+                "cache_percentage": (cached_count / len(articles) * 100) if articles else 0,
+                "queue_length": queue_length,
+                "is_generating": is_generating
+            }
+        }
         
     except Exception as e:
         print(f"Error getting hot topics: {e}")
         import traceback
         traceback.print_exc()
+        
         # Fallback to sample topics if the hot topics manager fails
         fallback_topic = {
             "id": str(uuid.uuid4()),
@@ -1103,7 +1361,8 @@ def get_feed():
             "sourceCount": 5,
             "heroImageUrl": "https://images.pexels.com/photos/8386434/pexels-photo-8386434.jpeg",
             "authorName": "AI Agent",
-            "authorTitle": "Tech Analyst"
+            "authorTitle": "Tech Analyst",
+            "cached": False
         }
         
         # Queue the fallback topic for article generation
@@ -1116,7 +1375,17 @@ def get_feed():
             "slug": fallback_topic["slug"]
         }])
         
-        return [fallback_topic]
+        return {
+            "articles": [fallback_topic],
+            "cache_stats": {
+                "total_articles": 1,
+                "cached_articles": 0,
+                "cache_percentage": 0,
+                "queue_length": 1,
+                "is_generating": False,
+                "error": str(e)
+            }
+        }
 
 # Add endpoint to check article generation status
 @app.get("/api/article-generation-status")
