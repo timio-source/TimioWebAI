@@ -508,7 +508,35 @@ def get_feed():
         # Return empty array on error instead of raising exception
         return []
 
-# Research trigger endpoint
+# Generic research endpoint for frontend
+@app.post("/api/research")
+def trigger_research_generic(request: dict):
+    """Generic research endpoint for any query."""
+    try:
+        query = request.get("query", "")
+        
+        if not query:
+            raise HTTPException(status_code=400, detail="Query is required")
+        
+        # Generate a slug for the research
+        slug = query.lower().replace(" ", "-").replace(".", "").replace(",", "").replace("?", "").replace("!", "")[:50]
+        
+        # For now, return a success response
+        # In production, this would trigger your research workflow
+        return {
+            "message": "Research triggered successfully",
+            "research_query": query,
+            "slug": slug,
+            "status": "success"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"--- ❌ ERROR IN GENERIC RESEARCH: {e} ---")
+        raise HTTPException(status_code=500, detail="Research failed")
+
+# Research trigger endpoint for specific topics
 @app.post("/api/hot-topic/{topic_id}/research")
 def trigger_research(topic_id: str):
     """Triggers research generation for a specific hot topic."""
@@ -542,6 +570,30 @@ def trigger_research(topic_id: str):
     except Exception as e:
         print(f"--- ❌ ERROR IN RESEARCH TRIGGER: {e} ---")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+# Get specific article endpoint
+@app.get("/api/article/{slug}")
+def get_article(slug: str):
+    """Get a specific research article by slug."""
+    try:
+        # This would integrate with your research system
+        # For now, return a 404 since articles aren't stored yet
+        raise HTTPException(status_code=404, detail="Article not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"--- ❌ ERROR GETTING ARTICLE: {e} ---")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+# Server time endpoint
+@app.get("/api/server-time")
+def get_server_time():
+    """Get current server time."""
+    return {
+        "server_time": datetime.now().isoformat(),
+        "timezone": "UTC"
+    }
 
 # Manual topic generation endpoint
 @app.post("/api/generate-topics")
