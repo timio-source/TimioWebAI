@@ -505,78 +505,79 @@ export default function ArticlePage() {
             </Card>
 
             {/* Expandable Sections */}
-          <ExpandableSection
-            title="Raw Info"
-            icon="document"
-            content={
-              <div className="mt-4 space-y-4">
-                {/* Check if dummy mode is enabled */}
-                {useDummyMode ? (
-                  // Show dummy data for the "Big Beautiful Bill"
-                  <>
-                    {rawFacts && rawFacts.length > 0 ? (
-                      <div className="space-y-3">
-                        {rawFacts.flatMap((factGroup: any, groupIndex: number) => 
-                          factGroup.facts.map((fact: any, index: number) => (
-                            <div key={`${groupIndex}-${index}`} className="flex items-start">
-                              <div className="h-1.5 w-1.5 bg-black rounded-full mt-2 mr-3 flex-shrink-0" />
-                              <span className="text-gray-900 leading-relaxed">
-                                {fact}
-                              </span>
-                            </div>
-                          ))
+            <div className="space-y-6 mt-8">
+              <ExpandableSection
+                title="Raw Info"
+                icon="document"
+                content={
+                  <div className="mt-4 space-y-4">
+                    {/* Check if dummy mode is enabled */}
+                    {useDummyMode ? (
+                      // Show dummy data for the "Big Beautiful Bill"
+                      <>
+                        {rawFacts && rawFacts.length > 0 ? (
+                          <div className="space-y-3">
+                            {rawFacts.flatMap((factGroup: any, groupIndex: number) => 
+                              factGroup.facts.map((fact: any, index: number) => (
+                                <div key={`${groupIndex}-${index}`} className="flex items-start">
+                                  <div className="h-1.5 w-1.5 bg-black rounded-full mt-2 mr-3 flex-shrink-0" />
+                                  <span className="text-gray-900 leading-relaxed">
+                                    {fact}
+                                  </span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-gray-600 italic">
+                            No raw facts available for this report.
+                          </div>
                         )}
-                      </div>
+                      </>
                     ) : (
-                      <div className="text-gray-600 italic">
-                        No raw facts available for this report.
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  // Show OpenAI-generated raw facts
-                  <>
-                    {rawFacts && rawFacts.length > 0 ? (
-                      // Display all facts as a single list without category headers
-                      <div className="space-y-3">
-                        {TextFormatter.formatRawFacts(rawFacts).flatMap((factGroup: any, groupIndex: number) => 
-                          factGroup.facts.map((fact: any, index: number) => (
-                            <div key={`${groupIndex}-${index}`} className="flex items-start">
-                              <div className="h-1.5 w-1.5 bg-black rounded-full mt-2 mr-3 flex-shrink-0" />
-                              <div className="text-gray-900 leading-relaxed">
-                                <div className="space-y-2">
-                                  <span>{fact.text}</span>
-                                  {fact.source && (
-                                    <div className="text-sm text-gray-600">
-                                      Source: {fact.source}
-                                      {fact.url && TextFormatter.isValidUrl(fact.url) && (
-                                        <a 
-                                          href={fact.url} 
-                                          target="_blank" 
-                                          rel="noopener noreferrer"
-                                          className="ml-2 text-blue-600 hover:text-blue-800 underline"
-                                        >
-                                          View Source
-                                        </a>
+                      // Show OpenAI-generated raw facts
+                      <>
+                        {rawFacts && rawFacts.length > 0 ? (
+                          // Display all facts as a single list without category headers
+                          <div className="space-y-3">
+                            {TextFormatter.formatRawFacts(rawFacts).flatMap((factGroup: any, groupIndex: number) => 
+                              factGroup.facts.map((fact: any, index: number) => (
+                                <div key={`${groupIndex}-${index}`} className="flex items-start">
+                                  <div className="h-1.5 w-1.5 bg-black rounded-full mt-2 mr-3 flex-shrink-0" />
+                                  <div className="text-gray-900 leading-relaxed">
+                                    <div className="space-y-2">
+                                      <span>{fact.text}</span>
+                                      {fact.source && (
+                                        <div className="text-sm text-gray-600">
+                                          Source: {fact.source}
+                                          {fact.url && TextFormatter.isValidUrl(fact.url) && (
+                                            <a 
+                                              href={fact.url} 
+                                              target="_blank" 
+                                              rel="noopener noreferrer"
+                                              className="ml-2 text-blue-600 hover:text-blue-800 underline"
+                                            >
+                                              View Source
+                                            </a>
+                                          )}
+                                        </div>
                                       )}
                                     </div>
-                                  )}
+                                  </div>
                                 </div>
-                              </div>
-                            </div>
-                          ))
+                              ))
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-gray-600 italic">
+                            No raw facts available for this report.
+                          </div>
                         )}
-                      </div>
-                    ) : (
-                      <div className="text-gray-600 italic">
-                        No raw facts available for this report.
-                      </div>
+                      </>
                     )}
-                  </>
-                )}
-              </div>
-            }
-          />
+                  </div>
+                }
+              />
 
               <ExpandableSection
                 title="Different Perspectives"
@@ -1015,8 +1016,10 @@ export default function ArticlePage() {
             <CitedSources sources={TextFormatter.formatCitedSources(citedSources)} />
             <div className="border-t-2 border-gray-300 my-6"></div>
           </div>
-          
-          {/* Disclaimer */}
+        </div>
+        
+        {/* Disclaimer */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-8">
           <div className="lg:col-span-8 flex items-center">
             <TriangleAlert className="h-8 w-8 mr-2 fill-yellow-300" />
             <p className="text-sm text-gray-500">
