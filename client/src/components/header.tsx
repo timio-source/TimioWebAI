@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Settings, RefreshCw } from "lucide-react";
 import { useLocation } from "wouter";
+import { useEffect } from "react";
 import timioLogo from "@assets/App Icon_1751662407764.png";
 
 interface HeaderProps {
@@ -16,6 +17,27 @@ export function Header({ onThemeToggle, onRefresh, isRefreshing = false, showRef
   const handleLogoClick = () => {
     setLocation('/');
   };
+
+  // Load the waitlist script when component mounts
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.async = true;
+    script.src = 'https://eocampaign1.com/form/0d3b352c-5893-11f0-91b6-a1c5ee19d5ba.js';
+    script.setAttribute('data-form', '0d3b352c-5893-11f0-91b6-a1c5ee19d5ba');
+    
+    // Append to the waitlist container specifically
+    const waitlistContainer = document.querySelector('.waitlist-container');
+    if (waitlistContainer) {
+      waitlistContainer.appendChild(script);
+    }
+
+    // Cleanup function to remove script when component unmounts
+    return () => {
+      if (waitlistContainer && waitlistContainer.contains(script)) {
+        waitlistContainer.removeChild(script);
+      }
+    };
+  }, []);
 
   return (
     <header className="theme-header-bg shadow-sm relative">
@@ -35,6 +57,13 @@ export function Header({ onThemeToggle, onRefresh, isRefreshing = false, showRef
             <div>
               <h1 className="text-xl sm:text-2xl lg:text-4xl font-bold theme-header-text">TIMIO News</h1>
               <p className="text-sm sm:text-base lg:text-lg theme-tagline-text">Truth. Trust. Transparency.</p>
+            </div>
+          </div>
+
+          {/* Waitlist Section */}
+          <div className="hidden md:flex items-center">
+            <div className="waitlist-container flex items-center justify-center">
+              {/* The script will inject the waitlist form here */}
             </div>
           </div>
           
@@ -87,24 +116,34 @@ export function Header({ onThemeToggle, onRefresh, isRefreshing = false, showRef
           </div>
         </div>
 
-        {/* Mobile Legal Links */}
-        <div className="lg:hidden pb-4 flex items-center justify-center space-x-6">
-          <a 
-            href="https://timio.news/privacy" 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="text-xs theme-tagline-text hover:theme-header-text transition-colors duration-200"
-          >
-            Privacy Policy
-          </a>
-          <a 
-            href="https://timio.news/terms-of-service/" 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="text-xs theme-tagline-text hover:theme-header-text transition-colors duration-200"
-          >
-            Terms of Service
-          </a>
+        {/* Mobile Section - Legal Links + Waitlist */}
+        <div className="lg:hidden pb-4">
+          {/* Mobile Waitlist */}
+          <div className="flex justify-center mb-3">
+            <div className="waitlist-container-mobile">
+              {/* Mobile waitlist form will be injected here */}
+            </div>
+          </div>
+          
+          {/* Mobile Legal Links */}
+          <div className="flex items-center justify-center space-x-6">
+            <a 
+              href="https://timio.news/privacy" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-xs theme-tagline-text hover:theme-header-text transition-colors duration-200"
+            >
+              Privacy Policy
+            </a>
+            <a 
+              href="https://timio.news/terms-of-service/" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-xs theme-tagline-text hover:theme-header-text transition-colors duration-200"
+            >
+              Terms of Service
+            </a>
+          </div>
         </div>
       </div>
     </header>
