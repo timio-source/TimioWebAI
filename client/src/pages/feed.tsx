@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Clock, TrendingUp, Eye, Search, Zap, RefreshCw } from "lucide-react";
+import { Clock, TrendingUp, Eye, Search, Zap, RefreshCw, Mail, Users, ArrowRight } from "lucide-react";
 import { useLocation } from "wouter";
 import { ThemeController } from "@/components/theme-controller";
 import { useTheme } from "@/hooks/use-theme";
@@ -47,6 +47,11 @@ export default function FeedPage() {
   const { currentTheme } = useTheme();
   const { toast } = useToast();
   const [useDummyMode, setUseDummyMode] = useState(false);
+
+  // Email signup state
+  const [email, setEmail] = useState("");
+  const [isSubmittingEmail, setIsSubmittingEmail] = useState(false);
+  const [showEmailSuccess, setShowEmailSuccess] = useState(false);
 
   // Check dummy mode on component mount and when localStorage changes
   useEffect(() => {
@@ -171,6 +176,26 @@ export default function FeedPage() {
     setShowThemeController(!showThemeController);
   };
 
+  // Email signup handler
+  const handleEmailSubmit = async () => {
+    if (!email || !email.includes('@')) return;
+    
+    setIsSubmittingEmail(true);
+    // Simulate API call - replace with actual submission logic
+    setTimeout(() => {
+      setIsSubmittingEmail(false);
+      setShowEmailSuccess(true);
+      setEmail("");
+      setTimeout(() => setShowEmailSuccess(false), 4000);
+    }, 1000);
+  };
+
+  const handleEmailKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleEmailSubmit();
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50">
@@ -243,6 +268,61 @@ export default function FeedPage() {
         isRefreshing={refreshTopicsMutation.isPending}
         showRefresh={true}
       />
+
+      {/* Simple Email Signup Section */}
+      <section className="theme-header-bg border-b theme-divider py-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col lg:flex-row items-center justify-between gap-6">
+            
+            {/* Left side - Message */}
+            <div className="text-center lg:text-left">
+              <p className="text-lg theme-header-text mb-1">
+                First <span className="font-bold">100 users</span> to get free premium <span className="font-bold">for life.</span>
+              </p>
+            </div>
+
+            {/* Right side - Signup Form */}
+            <div className="flex flex-col items-center lg:items-end">
+              <h3 className="text-xl font-semibold theme-header-text mb-4">Sign-up for TIMIO</h3>
+              
+              {showEmailSuccess ? (
+                <div className="flex items-center text-green-600 font-medium">
+                  <ArrowRight className="h-4 w-4 mr-2" />
+                  Successfully joined the waitlist!
+                </div>
+              ) : (
+                <div className="flex flex-col sm:flex-row gap-3 w-full max-w-md">
+                  <div className="relative flex-1">
+                    <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <input
+                      type="email"
+                      placeholder="Email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      onKeyPress={handleEmailKeyPress}
+                      className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                    />
+                  </div>
+                  <Button
+                    onClick={handleEmailSubmit}
+                    disabled={isSubmittingEmail || !email}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
+                  >
+                    {isSubmittingEmail ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                        Signing up...
+                      </>
+                    ) : (
+                      'Sign-up'
+                    )}
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-8">
