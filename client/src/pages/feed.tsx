@@ -271,18 +271,18 @@ export default function FeedPage() {
 
       {/* Simple Email Signup Section */}
       <section className="theme-header-bg border-b theme-divider py-8">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col lg:flex-row items-center justify-between gap-6">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col lg:flex-row items-center justify-center gap-8 lg:gap-12">
             
             {/* Left side - Message */}
-            <div className="text-center lg:text-left">
+            <div className="text-center lg:text-left flex-shrink-0">
               <p className="text-lg theme-header-text mb-1">
                 First <span className="font-bold">100 users</span> to get free premium <span className="font-bold">for life.</span>
               </p>
             </div>
 
             {/* Right side - Signup Form */}
-            <div className="flex flex-col items-center lg:items-end">
+            <div className="flex flex-col items-center lg:items-start">
               <h3 className="text-xl font-semibold theme-header-text mb-4">Sign-up for TIMIO</h3>
               
               {showEmailSuccess ? (
@@ -291,7 +291,7 @@ export default function FeedPage() {
                   Successfully joined the waitlist!
                 </div>
               ) : (
-                <div className="flex flex-col sm:flex-row gap-3 w-full max-w-md">
+                <div className="flex flex-col sm:flex-row gap-3 w-full max-w-sm">
                   <div className="relative flex-1">
                     <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                     <input
