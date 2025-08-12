@@ -270,7 +270,7 @@ export default function FeedPage() {
       />
 
       {/* Simple Email Signup Section */}
-      <section className="theme-page-bg border-b theme-divider py-8">
+      <section className="bg-gray-50 border-b border-gray-200 py-8">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col lg:flex-row items-center justify-center gap-8 lg:gap-12">
             
