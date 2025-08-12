@@ -454,26 +454,6 @@ export default function FeedPage() {
                   e.currentTarget.style.display = 'none';
                 }}
               />
-              
-              {/* Legal Links for Sidebar */}
-              <div className="space-y-3 text-center border-t pt-4">
-                <a 
-                  href="https://timio.news/privacy" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="block text-sm theme-tagline-text hover:theme-header-text transition-colors duration-200"
-                >
-                  Privacy Policy
-                </a>
-                <a 
-                  href="https://timio.news/terms-of-service/" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="block text-sm theme-tagline-text hover:theme-header-text transition-colors duration-200"
-                >
-                  Terms of Service
-                </a>
-              </div>
 
               <a 
                 href="https://timio.news" 
