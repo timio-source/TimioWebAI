@@ -115,20 +115,22 @@ export default function FeedPage() {
       }
     },
     onSuccess: (data) => {
-      // Navigate to the research loading page with the query
-      setLocation('/research-loading');
+      // Navigate to the generated research report
+      setLocation(`/article/${data.slug}`);
       toast({
-        title: "Research Started",
-        description: "Generating your comprehensive research report...",
+        title: "Research Report Generated",
+        description: "Your comprehensive research report is ready to view.",
       });
     },
     onError: (error) => {
       console.error("Research generation failed:", error);
       toast({
         title: "Research Failed",
-        description: "Unable to start research. Please try again.",
+        description: "Unable to generate research report. Please try again.",
         variant: "destructive",
       });
+      // Navigate back to feed on error
+      setLocation('/');
     }
   });
 
@@ -143,8 +145,8 @@ export default function FeedPage() {
         return;
       }
       
-      // Trigger the research mutation
-      researchMutation.mutate(searchQuery.trim());
+      // Navigate to loading page immediately
+      setLocation('/research-loading');
     }
   };
 
