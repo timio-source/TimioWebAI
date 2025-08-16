@@ -23,9 +23,11 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
+
+    
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        target: "srv-d27anfs9c44c738ffmm0",
         changeOrigin: true,
         configure: (proxy, _options) => {
           proxy.on('error', (err, _req, _res) => {
