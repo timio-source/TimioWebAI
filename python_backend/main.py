@@ -90,8 +90,8 @@ def with_rate_limit_retry(max_retries=3, base_delay=2):
     return decorator
 
 # Queue management functions
-def queue_article_generation(topics):
-    """Add topics to the article generation queue if they don't have cached articles."""
+def queue_article_generation(topics, force_research=False):
+    """Add topics to the article generation queue. If force_research=True, research all topics regardless of cache."""
     global article_generation_queue, is_generating_articles
     
     with article_generation_lock:
@@ -101,8 +101,8 @@ def queue_article_generation(topics):
             topic_slug = topic.get('headline', '').lower().replace(' ', '-').replace('"', '')
             topic_slug = re.sub(r'[^a-z0-9-]', '', topic_slug)
             
-            # Check if article is already cached
-            if topic_slug not in report_cache:
+            # Check if article is already cached (unless force_research is True)
+            if force_research or topic_slug not in report_cache:
                 # Check if already in queue
                 already_queued = any(
                     existing_topic.get('slug') == topic_slug 
@@ -111,11 +111,12 @@ def queue_article_generation(topics):
                 
                 if not already_queued:
                     topic['slug'] = topic_slug
+                    topic['force_research'] = force_research
                     new_topics.append(topic)
         
         # Add new topics to queue
         article_generation_queue.extend(new_topics)
-        logger.info(f"📝 Queued {len(new_topics)} new articles for generation")
+        logger.info(f"📝 Queued {len(new_topics)} new articles for generation (force_research={force_research})")
     
     # Start background generation if not already running
     if not is_generating_articles and article_generation_queue:
@@ -145,9 +146,9 @@ def process_article_generation_queue():
             logger.info(f"🔄 Generating article {processed_count + 1} for: {topic_name}")
             
             try:
-                # Check if already cached before processing
+                # Check if already cached before processing (unless this is a forced refresh)
                 topic_slug = topic.get('slug', '')
-                if topic_slug in report_cache:
+                if topic_slug in report_cache and not topic.get('force_research', False):
                     logger.info(f"✅ Article already cached: {topic_slug}")
                     continue
                 
@@ -199,8 +200,8 @@ async def generate_article_for_topic(topic):
             logger.error("No headline provided for topic")
             return None
         
-        # Check if article is already cached
-        if topic_slug in report_cache:
+        # Check if article is already cached (unless this is a forced refresh)
+        if topic_slug in report_cache and not topic.get('force_research', False):
             logger.info(f"Article already cached: {topic_slug}")
             return topic_slug
         
@@ -1103,6 +1104,17 @@ def get_feed():
         # Clear the cache to force fresh data
         report_cache.clear()
         logger.info(f"🧹 Cache cleared - {len(report_cache)} articles removed")
+        
+        # Force background research for all new hot topics
+        try:
+            from feed import hot_topics_manager
+            topics_data = hot_topics_manager.get_cached_topics()
+            topics = topics_data.get('topics', [])
+            if topics:
+                logger.info(f"🚀 Starting background research for {len(topics)} new hot topics")
+                queue_article_generation(topics, force_research=True)
+        except Exception as e:
+            logger.error(f"Error starting background research: {e}")
     
     try:
         # Try to import hot topics manager
@@ -1113,7 +1125,7 @@ def get_feed():
         topics = topics_data.get('topics', [])
         
         # Queue article generation for topics that don't have cached articles
-        queue_article_generation(topics)
+        queue_article_generation(topics, force_research=False)
         
         articles = []
         cached_count = 0
@@ -1180,7 +1192,7 @@ def get_feed():
             "generated_at": fallback_topic["publishedAt"],
             "image_url": fallback_topic["heroImageUrl"],
             "slug": fallback_topic["slug"]
-        }])
+        }], force_research=False)
         
         return [fallback_topic]
 
@@ -1197,7 +1209,7 @@ async def warm_cache():
             return {"message": "No topics found to generate articles for", "count": 0}
         
         # Queue all topics for generation
-        queue_article_generation(topics)
+        queue_article_generation(topics, force_research=False)
         
         return {
             "message": f"Queued {len(topics)} topics for article generation",

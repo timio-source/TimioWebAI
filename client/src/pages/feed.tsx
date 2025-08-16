@@ -156,7 +156,7 @@ export default function FeedPage() {
     }
   };
 
-  const handleTopicResearch = (articleTitle: string) => {
+  const handleTopicResearch = (articleTitle: string, articleSlug?: string) => {
     // Save the article title as the search query
     localStorage.setItem('searchQuery', articleTitle);
     
@@ -166,7 +166,13 @@ export default function FeedPage() {
       return;
     }
     
-    // Navigate to research loading page which will handle the research
+    // If we have a slug, navigate directly to the cached article
+    if (articleSlug) {
+      setLocation(`/article/${articleSlug}`);
+      return;
+    }
+    
+    // Fallback to research loading page if no slug available
     setLocation('/research-loading');
   };
 
@@ -284,8 +290,8 @@ export default function FeedPage() {
             </div>
 
             {/* Right side - Signup Form */}
-            <div className="flex flex-col items-center lg:items-start">
-              <h3 className="text-xl font-semibold theme-header-text mb-4">Sign-up for TIMIO</h3>
+            <div className="flex flex-col items-center">
+              <h3 className="text-xl font-semibold theme-header-text mb-4 text-center">Sign-up for TIMIO</h3>
               
               {showEmailSuccess ? (
                 <div className="flex items-center text-green-600 font-medium">
@@ -336,7 +342,7 @@ export default function FeedPage() {
               <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold theme-research-prompt-text text-center px-4">
                 Generate a report on any event
               </h2>
-              <div className="relative w-full max-w-2xl px-4 sm:px-0">
+              <div className="relative w-full max-w-4xl px-4 sm:px-0">
                 {/* Enhanced background with gradient */}
                 <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-blue-700 rounded-xl sm:rounded-2xl blur-sm opacity-20"></div>
                 <div className="relative bg-white rounded-xl sm:rounded-2xl shadow-xl sm:shadow-2xl border-2 border-blue-200 hover:border-blue-400 transition-all duration-300 hover:shadow-3xl transform hover:-translate-y-1">
@@ -420,7 +426,11 @@ export default function FeedPage() {
             {/* Articles Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 px-4 sm:px-0">
               {articles?.map((article) => (
-                <Card key={article.id} className="theme-article-card-bg theme-article-card-border theme-article-card-hover border-2 shadow-card hover:shadow-card-hover transition-all duration-200 cursor-pointer group overflow-hidden h-full">
+                <Card 
+                  key={article.id} 
+                  className="theme-article-card-bg theme-article-card-border theme-article-card-hover border-2 shadow-card hover:shadow-card-hover transition-all duration-200 cursor-pointer group overflow-hidden h-full"
+                  onClick={() => handleTopicResearch(article.title, article.slug)}
+                >
                     {/* Article Image with Overlay */}
                     <div className="relative overflow-hidden">
                       <img 
@@ -447,15 +457,10 @@ export default function FeedPage() {
                       <div className="absolute bottom-0 left-0 right-0 p-4">
                         <p className="text-sm font-medium text-blue-300 mb-1 flex items-center">
                           <Zap className="h-3 w-3 mr-1" />
-                          Research this topic:
+                          View research report:
                         </p>
                         <h3 
-                          className="text-xl font-semibold text-white mb-2 line-clamp-2 group-hover:text-blue-200 transition-colors duration-200 cursor-pointer hover:underline"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            handleTopicResearch(article.title);
-                          }}
+                          className="text-xl font-semibold text-white mb-2 line-clamp-2 group-hover:text-blue-200 transition-colors duration-200"
                         >
                           {article.title}
                         </h3>
@@ -484,18 +489,9 @@ export default function FeedPage() {
                           </span>
                         </div>
                         
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-xs"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            handleTopicResearch(article.title);
-                          }}
-                        >
-                          Research
-                        </Button>
+                        <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-xs">
+                          <span className="text-blue-600 font-medium">View Report</span>
+                        </div>
                       </div>
                     </CardContent>
                   </Card>

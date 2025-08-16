@@ -274,7 +274,7 @@ export default function ArticlePage() {
               <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold theme-research-prompt-text text-center px-4">
                 Generate a report on any event
               </h2>
-              <div className="relative w-full max-w-2xl px-4 sm:px-0">
+              <div className="relative w-full max-w-4xl px-4 sm:px-0">
                 <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-blue-700 rounded-xl sm:rounded-2xl blur-sm opacity-20"></div>
                 <div className="relative bg-white rounded-xl sm:rounded-2xl shadow-xl sm:shadow-2xl border-2 border-blue-200 hover:border-blue-400 transition-all duration-300 hover:shadow-3xl transform hover:-translate-y-1">
                   <Search className="absolute left-3 sm:left-6 top-1/2 transform -translate-y-1/2 h-4 w-4 sm:h-7 sm:w-7 text-blue-500" />
@@ -389,10 +389,22 @@ export default function ArticlePage() {
       <div className="border-t theme-header-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
           <div className="flex flex-col items-center space-y-4 sm:space-y-6">
+            {/* Back button for all screen sizes */}
+            <div className="w-full flex justify-start px-4">
+              <Button
+                onClick={() => setLocation('/')}
+                variant="ghost"
+                size="sm"
+                className="text-gray-600 hover:text-gray-900"
+              >
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back to Feed
+              </Button>
+            </div>
             <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold theme-research-prompt-text text-center px-4">
               Generate a report on any event
             </h2>
-            <div className="relative w-full max-w-2xl px-4 sm:px-0">
+            <div className="relative w-full max-w-4xl px-4 sm:px-0">
               {/* Enhanced background with gradient */}
               <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-blue-700 rounded-xl sm:rounded-2xl blur-sm opacity-20"></div>
               <div className="relative bg-white rounded-xl sm:rounded-2xl shadow-xl sm:shadow-2xl border-2 border-blue-200 hover:border-blue-400 transition-all duration-300 hover:shadow-3xl transform hover:-translate-y-1">
@@ -449,6 +461,14 @@ export default function ArticlePage() {
 
                   {/* Back and Share Buttons */}
                   <div className="absolute top-4 right-4 flex items-center space-x-2">
+                    <Button
+                      onClick={() => setLocation('/')}
+                      variant="ghost"
+                      size="sm"
+                      className="text-white hover:bg-white/20 p-2"
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                    </Button>
                     <Button
                       onClick={handleShare}
                       variant="ghost"

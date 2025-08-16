@@ -4,7 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { SearchLoadingState } from "@/components/ui/loading-skeleton";
 import { Button } from "@/components/ui/button";
-import { Settings } from "lucide-react";
+import { Settings, ArrowLeft } from "lucide-react";
 import { ThemeController } from "@/components/theme-controller";
 import { useToast } from "@/hooks/use-toast";
 import timioLogo from "@assets/App Icon_1751662407764.png";
@@ -100,6 +100,15 @@ export default function ResearchLoadingPage() {
             
             <div className="flex items-center space-x-2 sm:space-x-4">
               <Button
+                onClick={() => setLocation('/')}
+                variant="outline"
+                size="sm"
+                className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-4"
+              >
+                <ArrowLeft className="h-3 w-3 sm:h-4 sm:w-4" />
+                <span className="hidden sm:inline">Back</span>
+              </Button>
+              <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setShowThemeController(!showThemeController)}
@@ -118,7 +127,7 @@ export default function ResearchLoadingPage() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Loading Status */}
         <div className="text-center mb-8">
-          <div className="max-w-2xl mx-auto">
+          <div className="max-w-4xl mx-auto">
             <h2 className="text-2xl md:text-3xl font-bold theme-headline-text mb-4">
               Generating Research Report: "{searchQuery}"
             </h2>
