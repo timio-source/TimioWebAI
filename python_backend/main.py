@@ -536,6 +536,16 @@ RESEARCH_PROMPT_TEMPLATE = """You are a real-time, non-partisan research assista
 
 CRITICAL FOCUS REQUIREMENT: You are researching EXACTLY "[QUERY]" - nothing else. You must stay strictly on topic and not deviate from this specific query. If you cannot find relevant information for the exact query, you must state "No relevant information found for [QUERY]" rather than researching related topics.
 
+STRICT CONTENT FILTERING RULES:
+- ONLY include information that is DIRECTLY about "[QUERY]"
+- DO NOT include background information, context, or related topics unless they are ESSENTIAL to understanding "[QUERY]"
+- DO NOT add historical context, broader implications, or tangential subjects
+- DO NOT include information about similar topics, related events, or broader trends
+- If an article mentions "[QUERY]" briefly but focuses on other topics, DO NOT include it
+- If a source discusses broader context that doesn't directly relate to "[QUERY]", exclude it
+- Focus on the SPECIFIC query, not the general subject area
+- Every fact, quote, and perspective must be DIRECTLY about "[QUERY]"
+
 SEARCH STRATEGY:
 1. Use the EXACT query "[QUERY]" for all web searches
 2. Only research information directly related to "[QUERY]"
@@ -543,6 +553,7 @@ SEARCH STRATEGY:
 4. If you cannot find information about "[QUERY]", do not substitute with related topics
 5. Use the scrape_website tool to get deeper content and real quotes from important sources
 6. Focus on getting direct quotes from primary sources and official statements
+7. REJECT any content that is not specifically about "[QUERY]"
 
 You only can output two types of responses:
 1. Content based on real articles, real public sources accessed live through your browsing ability with cited urls that are DIRECTLY about "[QUERY]"
@@ -555,7 +566,7 @@ Quote guide: Any content you write within "" must never be paraphrased or rewrit
 You strictly follow this format, and provide no extra info outside of it:
 
 Executive Summary:
-Short, simple, easy to read, bullet point summary of "[QUERY]" in plain English. Don't use complete sentences. Only include information directly about "[QUERY]".
+Short, simple, easy to read, bullet point summary of "[QUERY]" in plain English. Don't use complete sentences. Only include information directly about "[QUERY]". DO NOT add context, background, or related information.
 
 Raw facts:
 1. Determine the raw facts on "[QUERY]" from reliable sources
@@ -568,9 +579,10 @@ https://www.govinfo.gov/
 Official statements from White House:
 https://www.whitehouse.gov/news/
 2. Return all the raw facts you find about "[QUERY]" in a bullet point list. Organize the list by source.
+3. DO NOT include facts about related topics, background information, or broader context.
 
 Timeline:
-Bullet point timeline of events related to "[QUERY]" if relevant
+Bullet point timeline of events related to "[QUERY]" if relevant. ONLY include events that directly involve "[QUERY]", not related or background events.
 
 Different perspectives – summarize how "[QUERY]" is being covered by outlets with different perspectives on the story. Include REAL quotes and the outlet names. How are people and outlets interpreting the raw info about "[QUERY]" from section 2?
 a. Research articles with opposing or different takes on "[QUERY]"
@@ -581,6 +593,7 @@ Viewpoint Title 1 (No "")
 - 1 bullet point summary of view on "[QUERY]"
 - Publisher Name
 - Short Quote
+d. ONLY include perspectives that are DIRECTLY about "[QUERY]", not related topics or broader implications.
 
 Conflicting Info:
 a. Determine if there are conflicts between any of the viewpoints you found about "[QUERY]"
@@ -591,8 +604,11 @@ ii. After each conflict list the conflicting sources as follows: [Source(s)] vs 
 - Link
 - [Repeat if multiple articles under this viewpoint]
 - [Don't waste words on section titles like "Publisher Name:" or "Quote"]
+d. ONLY include conflicts that are DIRECTLY about "[QUERY]", not related topics.
 
-REMINDER: Stay focused on "[QUERY]" - do not research related topics or broader subjects unless they are directly relevant to "[QUERY]"."""
+FINAL VALIDATION: Before submitting your response, review each section and ensure that every piece of information is DIRECTLY about "[QUERY]". Remove any content that is tangential, related, or provides broader context that doesn't specifically address "[QUERY]".
+
+REMINDER: Stay focused on "[QUERY]" - do not research related topics or broader subjects unless they are directly relevant to "[QUERY]". If you cannot find enough information specifically about "[QUERY]", it is better to have a shorter, focused report than to include irrelevant information."""
 
 # --- Examples for Structured Output ---
 example_for_article = {
@@ -942,6 +958,16 @@ def create_writer_agent(section_name: str):
 
 CRITICAL FOCUS REQUIREMENT: You must stay strictly on topic and only include information that is directly relevant to the research query. Do not include tangential or related information that is not specifically about the query.
 
+STRICT CONTENT FILTERING RULES:
+- ONLY include information that is DIRECTLY about the research query
+- DO NOT include background information, context, or related topics unless they are ESSENTIAL to understanding the query
+- DO NOT add historical context, broader implications, or tangential subjects
+- DO NOT include information about similar topics, related events, or broader trends
+- If content mentions the query briefly but focuses on other topics, DO NOT include it
+- If a source discusses broader context that doesn't directly relate to the query, exclude it
+- Focus on the SPECIFIC query, not the general subject area
+- Every fact, quote, and perspective must be DIRECTLY about the query
+
 IMPORTANT: You NEVER fabricate data, quotes, articles, or URLs. You only work with real content from the provided sources.
 
 Quote guide: Any content you write within "" must never be paraphrased or rewritten, while content you write outside of "" can be paraphrased. They must be shown exactly as originally published.
@@ -958,6 +984,8 @@ QUOTE EXTRACTION:
 - Include attribution for each quote (who said it, where it was published)
 - Focus on quotes that directly relate to the research query
 - Prefer quotes from primary sources, official statements, and authoritative sources
+
+FINAL VALIDATION: Before submitting your response, review the content and ensure that every piece of information is DIRECTLY about the research query. Remove any content that is tangential, related, or provides broader context that doesn't specifically address the query.
 
 You MUST generate a valid JSON output that strictly follows the structure and field names of the example below.
 Do not add any commentary, explanations, or any text outside of the JSON output.
@@ -978,6 +1006,13 @@ def create_conflicting_info_agent():
 
 Your primary goal is to find factual disputes, contradictions, opposing claims, and conflicting interpretations in the provided web content.
 
+STRICT CONTENT FILTERING RULES:
+- ONLY include conflicts that are DIRECTLY about the research query
+- DO NOT include conflicts about related topics, broader implications, or tangential subjects
+- DO NOT include conflicts about similar events or broader trends
+- Focus on the SPECIFIC query, not the general subject area
+- Every conflict must be DIRECTLY about the research query
+
 IMPORTANT: You NEVER fabricate conflicts or sources. You only identify real conflicts from the provided content.
 
 CONTENT REQUIREMENTS:
@@ -992,6 +1027,8 @@ CRITICAL QUOTE AND SOURCE DEDUPLICATION RULE:
 - You MUST also ensure that NO QUOTE is repeated within the conflicting_info section itself
 - You MUST ensure that NO SOURCE is reused within the conflicting_info section itself
 - Each conflict must use completely unique quotes AND unique sources that have not been used in any other conflict
+
+FINAL VALIDATION: Before submitting your response, review each conflict and ensure that it is DIRECTLY about the research query. Remove any conflicts that are tangential, related, or provide broader context that doesn't specifically address the query.
 
 You MUST generate a valid JSON output that strictly follows the structure and field names of the example below.
 Do not add any commentary, explanations, or any text outside of the JSON output.
@@ -1012,6 +1049,14 @@ def create_executive_summary_agent():
 
 Your goal is to provide a brief, easy-to-read summary of the most important findings from the research.
 
+STRICT CONTENT FILTERING RULES:
+- ONLY include information that is DIRECTLY about the research query
+- DO NOT include background information, context, or related topics unless they are ESSENTIAL to understanding the query
+- DO NOT add historical context, broader implications, or tangential subjects
+- DO NOT include information about similar topics, related events, or broader trends
+- Focus on the SPECIFIC query, not the general subject area
+- Every bullet point must be DIRECTLY about the research query
+
 IMPORTANT: You NEVER fabricate data, quotes, articles, or URLs. You only work with real content from the provided sources.
 
 CONTENT LIMITATIONS:
@@ -1019,6 +1064,9 @@ CONTENT LIMITATIONS:
 - Each bullet point should be concise and focused on the most critical information
 - Avoid redundant or overlapping information
 - Focus on the most newsworthy or significant findings
+- ONLY include findings that are DIRECTLY about the research query
+
+FINAL VALIDATION: Before submitting your response, review each bullet point and ensure that it is DIRECTLY about the research query. Remove any points that are tangential, related, or provide broader context that doesn't specifically address the query.
 
 You MUST generate a valid JSON output that strictly follows the structure and field names of the example below.
 Do not add any commentary, explanations, or any text outside of the JSON output.
@@ -1039,6 +1087,13 @@ def create_raw_facts_agent():
 
 Your goal is to identify the most important factual statements from the provided sources.
 
+STRICT CONTENT FILTERING RULES:
+- ONLY include facts that are DIRECTLY about the research query
+- DO NOT include facts about related topics, broader implications, or tangential subjects
+- DO NOT include facts about similar events or broader trends
+- Focus on the SPECIFIC query, not the general subject area
+- Every fact must be DIRECTLY about the research query
+
 IMPORTANT: You NEVER fabricate data, quotes, articles, or URLs. You only work with real content from the provided sources.
 
 CONTENT LIMITATIONS:
@@ -1047,6 +1102,9 @@ CONTENT LIMITATIONS:
 - Avoid redundant or similar facts from the same source
 - Prioritize facts that are directly quoted or clearly stated
 - Organize by source, but limit to 6 total facts
+- ONLY include facts that are DIRECTLY about the research query
+
+FINAL VALIDATION: Before submitting your response, review each fact and ensure that it is DIRECTLY about the research query. Remove any facts that are tangential, related, or provide broader context that doesn't specifically address the query.
 
 You MUST generate a valid JSON output that strictly follows the structure and field names of the example below.
 Do not add any commentary, explanations, or any text outside of the JSON output.
@@ -1067,6 +1125,13 @@ def create_perspectives_agent():
 
 Your goal is to find contrasting perspectives on the topic from different sources and outlets.
 
+STRICT CONTENT FILTERING RULES:
+- ONLY include perspectives that are DIRECTLY about the research query
+- DO NOT include perspectives about related topics, broader implications, or tangential subjects
+- DO NOT include perspectives about similar events or broader trends
+- Focus on the SPECIFIC query, not the general subject area
+- Every perspective must be DIRECTLY about the research query
+
 IMPORTANT: You NEVER fabricate data, quotes, articles, or URLs. You only work with real content from the provided sources.
 
 CONTENT REQUIREMENTS:
@@ -1076,6 +1141,9 @@ CONTENT REQUIREMENTS:
 - Include real quotes from the sources to support each perspective
 - Ensure each perspective has a clear, distinct headline
 - Avoid redundant or similar perspectives
+- ONLY include perspectives that are DIRECTLY about the research query
+
+FINAL VALIDATION: Before submitting your response, review each perspective and ensure that it is DIRECTLY about the research query. Remove any perspectives that are tangential, related, or provide broader context that doesn't specifically address the query.
 
 You MUST generate a valid JSON output that strictly follows the structure and field names of the example below.
 Do not add any commentary, explanations, or any text outside of the JSON output.
