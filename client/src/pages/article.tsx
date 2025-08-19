@@ -518,6 +518,8 @@ export default function ArticlePage() {
                           No executive summary available for this report.
                         </div>
                       )}
+                      
+
                     </div>
                   }
                 />
@@ -936,7 +938,18 @@ export default function ArticlePage() {
                               <div className="space-y-4">
                                 <div className="flex items-center space-x-3">
                                   <div className="w-6 h-6 bg-black text-white rounded-full flex items-center justify-center text-sm font-bold">A</div>
-                                  <span className="font-semibold text-black text-sm uppercase tracking-wide">{perspective.source}</span>
+                                  {perspective.url && TextFormatter.isValidUrl(perspective.url) ? (
+                                    <a 
+                                      href={perspective.url} 
+                                      target="_blank" 
+                                      rel="noopener noreferrer"
+                                      className="font-semibold text-black text-sm uppercase tracking-wide hover:text-blue-600 hover:underline"
+                                    >
+                                      {perspective.source}
+                                    </a>
+                                  ) : (
+                                    <span className="font-semibold text-black text-sm uppercase tracking-wide">{perspective.source}</span>
+                                  )}
                                 </div>
                                 <div className="border-l-4 border-gray-400 pl-4">
                                   <blockquote className="text-gray-800 italic text-base leading-relaxed">
@@ -954,9 +967,18 @@ export default function ArticlePage() {
                               <div className="space-y-4">
                                 <div className="flex items-center space-x-3">
                                   <div className="w-6 h-6 bg-black text-white rounded-full flex items-center justify-center text-sm font-bold">B</div>
-                                  <a href={perspective.conflictUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                                  {perspective.conflictUrl && TextFormatter.isValidUrl(perspective.conflictUrl) ? (
+                                    <a 
+                                      href={perspective.conflictUrl} 
+                                      target="_blank" 
+                                      rel="noopener noreferrer"
+                                      className="font-semibold text-black text-sm uppercase tracking-wide hover:text-blue-600 hover:underline"
+                                    >
+                                      {perspective.conflictSource}
+                                    </a>
+                                  ) : (
                                     <span className="font-semibold text-black text-sm uppercase tracking-wide">{perspective.conflictSource}</span>
-                                  </a>
+                                  )}
                                 </div>
                                 <div className="border-l-4 border-gray-400 pl-4">
                                   <p className="text-gray-600 italic mt-2">

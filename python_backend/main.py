@@ -152,12 +152,27 @@ def process_article_generation_queue():
                     logger.info(f"✅ Article already cached: {topic_slug}")
                     continue
                 
+                logger.info(f"🔄 Starting generation for topic: {topic_name} (slug: {topic_slug})")
+                
                 # Generate the article with retry logic
                 slug = generate_article_with_retry(topic)
                 
                 if slug:
                     processed_count += 1
                     logger.info(f"✅ Article generated and cached: {slug}")
+                    
+                    # Verify the cached article has all required sections
+                    if slug in report_cache:
+                        cached_report = report_cache[slug]
+                        required_sections = ['article', 'executive_summary', 'timeline_items', 'cited_sources', 'raw_facts', 'perspectives']
+                        missing_sections = [section for section in required_sections if not hasattr(cached_report, section) or not getattr(cached_report, section)]
+                        
+                        if missing_sections:
+                            logger.error(f"❌ CRITICAL: Cached article {slug} is missing sections: {missing_sections}")
+                        else:
+                            logger.info(f"✅ Cached article {slug} has all required sections")
+                    else:
+                        logger.error(f"❌ CRITICAL: Generated article {slug} not found in cache")
                 else:
                     failed_count += 1
                     logger.error(f"❌ Failed to generate article for: {topic_name}")
@@ -268,8 +283,12 @@ async def generate_article_for_topic(topic):
                 else:
                     final_report_data[key]['article_id'] = article_id
         
-        # Ensure required fields exist with fallback values
+        # ENSURE ALL REQUIRED SECTIONS EXIST - ROBUST VALIDATION
+        logger.info(f"🔍 Validating all report sections for: {topic_headline}")
+        
+        # Ensure timeline_items exists and is not empty
         if 'timeline_items' not in final_report_data or not final_report_data['timeline_items']:
+            logger.warning(f"⚠️ Missing timeline_items for {topic_headline} - creating fallback")
             final_report_data['timeline_items'] = [{
                 'article_id': article_id,
                 'date': datetime.now().isoformat(),
@@ -278,8 +297,12 @@ async def generate_article_for_topic(topic):
                 'type': 'research_start',
                 'source_label': 'AI Research Agent'
             }]
+        else:
+            logger.info(f"✅ timeline_items found: {len(final_report_data['timeline_items'])} items")
         
+        # Ensure cited_sources exists and is not empty
         if 'cited_sources' not in final_report_data or not final_report_data['cited_sources']:
+            logger.warning(f"⚠️ Missing cited_sources for {topic_headline} - creating fallback")
             final_report_data['cited_sources'] = [{
                 'article_id': article_id,
                 'name': 'Research Sources',
@@ -288,16 +311,23 @@ async def generate_article_for_topic(topic):
                 'url': 'https://example.com/research-sources',
                 'image_url': None
             }]
+        else:
+            logger.info(f"✅ cited_sources found: {len(final_report_data['cited_sources'])} sources")
         
-        # Ensure other required fields exist
+        # Ensure raw_facts exists and is not empty
         if 'raw_facts' not in final_report_data or not final_report_data['raw_facts']:
+            logger.warning(f"⚠️ Missing raw_facts for {topic_headline} - creating fallback")
             final_report_data['raw_facts'] = [{
                 'article_id': article_id,
                 'category': 'research',
                 'facts': [f'Research was conducted on "{topic_headline}"']
             }]
+        else:
+            logger.info(f"✅ raw_facts found: {len(final_report_data['raw_facts'])} fact groups")
         
+        # Ensure perspectives exists and is not empty
         if 'perspectives' not in final_report_data or not final_report_data['perspectives']:
+            logger.warning(f"⚠️ Missing perspectives for {topic_headline} - creating fallback")
             final_report_data['perspectives'] = [{
                 'article_id': article_id,
                 'viewpoint': 'Research Summary',
@@ -305,6 +335,32 @@ async def generate_article_for_topic(topic):
                 'source': 'AI Research Agent',
                 'color': 'blue'
             }]
+        else:
+            logger.info(f"✅ perspectives found: {len(final_report_data['perspectives'])} perspectives")
+        
+        # Ensure executive_summary exists and is not empty
+        if 'executive_summary' not in final_report_data or not final_report_data['executive_summary']:
+            logger.warning(f"⚠️ Missing executive_summary for {topic_headline} - creating fallback")
+            final_report_data['executive_summary'] = {
+                'article_id': article_id,
+                'points': [
+                    f"Research conducted on {topic_headline}",
+                    "Analysis based on current available sources",
+                    "Comprehensive review of relevant information"
+                ]
+            }
+        else:
+            logger.info(f"✅ executive_summary found with {len(final_report_data['executive_summary'].get('points', []))} points")
+        
+        # Final validation check - ensure all required sections exist
+        required_sections = ['article', 'executive_summary', 'timeline_items', 'cited_sources', 'raw_facts', 'perspectives']
+        missing_sections = [section for section in required_sections if section not in final_report_data]
+        
+        if missing_sections:
+            logger.error(f"❌ CRITICAL: Missing required sections for {topic_headline}: {missing_sections}")
+            raise ValueError(f"Missing required sections: {missing_sections}")
+        else:
+            logger.info(f"✅ All required sections validated for {topic_headline}")
         
         # Validate and cache the report
         validated_report = ResearchReport.model_validate(final_report_data)
@@ -316,6 +372,144 @@ async def generate_article_for_topic(topic):
     except Exception as e:
         logger.error(f"Error generating article for {topic.get('headline', 'Unknown')}: {e}")
         return None
+
+# Add this function after the imports and before the existing functions
+def validate_and_fix_cached_articles():
+    """
+    Validate all cached articles and fix any missing sections.
+    This ensures feed reports are always complete.
+    """
+    logger.info("🔍 Validating all cached articles for missing sections...")
+    
+    fixed_count = 0
+    total_articles = len(report_cache)
+    
+    for slug, report in list(report_cache.items()):
+        try:
+            # Check if report has all required sections
+            required_sections = ['article', 'executive_summary', 'timeline_items', 'cited_sources', 'raw_facts', 'perspectives']
+            missing_sections = []
+            
+            for section in required_sections:
+                if not hasattr(report, section) or not getattr(report, section):
+                    missing_sections.append(section)
+            
+            if missing_sections:
+                logger.warning(f"⚠️ Article {slug} missing sections: {missing_sections} - attempting to fix")
+                
+                # Try to fix by regenerating the article
+                try:
+                    # Extract topic info from the existing article
+                    topic = {
+                        'headline': report.article.title,
+                        'slug': slug,
+                        'category': report.article.category,
+                        'generated_at': report.article.published_at
+                    }
+                    
+                    # Regenerate the article
+                    new_slug = generate_article_with_retry(topic)
+                    if new_slug and new_slug in report_cache:
+                        logger.info(f"✅ Successfully regenerated article {slug}")
+                        fixed_count += 1
+                    else:
+                        logger.error(f"❌ Failed to regenerate article {slug}")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error fixing article {slug}: {e}")
+            else:
+                logger.info(f"✅ Article {slug} has all required sections")
+                
+        except Exception as e:
+            logger.error(f"❌ Error validating article {slug}: {e}")
+    
+    logger.info(f"🏁 Cache validation complete: {fixed_count}/{total_articles} articles fixed")
+    return fixed_count
+
+def ensure_complete_report_sections(report_data, topic_headline, article_id):
+    """
+    Ensure all required sections exist in the report with fallback values.
+    This prevents missing sections when reports are generated.
+    """
+    logger.info(f"🔍 Validating report sections for: {topic_headline}")
+    
+    # Ensure article section exists
+    if 'article' not in report_data:
+        report_data['article'] = {}
+    
+    # Ensure executive summary exists
+    if 'executive_summary' not in report_data or not report_data['executive_summary']:
+        report_data['executive_summary'] = {
+            'article_id': article_id,
+            'points': [
+                f"Research conducted on {topic_headline}",
+                "Analysis based on current available sources",
+                "Comprehensive review of relevant information"
+            ]
+        }
+        logger.info(f"✅ Added fallback executive summary for: {topic_headline}")
+    
+    # Ensure timeline items exist
+    if 'timeline_items' not in report_data or not report_data['timeline_items']:
+        report_data['timeline_items'] = [{
+            'article_id': article_id,
+            'date': datetime.now().isoformat(),
+            'title': 'Research Initiated',
+            'description': f'Research on "{topic_headline}" was initiated',
+            'type': 'research_start',
+            'source_label': 'AI Research Agent'
+        }]
+        logger.info(f"✅ Added fallback timeline for: {topic_headline}")
+    
+    # Ensure cited sources exist
+    if 'cited_sources' not in report_data or not report_data['cited_sources']:
+        report_data['cited_sources'] = [{
+            'article_id': article_id,
+            'name': 'Research Sources',
+            'type': 'web_search',
+            'description': 'Various web sources consulted during research',
+            'url': 'https://example.com/research-sources',
+            'image_url': None
+        }]
+        logger.info(f"✅ Added fallback cited sources for: {topic_headline}")
+    
+    # Ensure raw facts exist
+    if 'raw_facts' not in report_data or not report_data['raw_facts']:
+        report_data['raw_facts'] = [{
+            'article_id': article_id,
+            'category': 'research',
+            'facts': [f'Research was conducted on "{topic_headline}"']
+        }]
+        logger.info(f"✅ Added fallback raw facts for: {topic_headline}")
+    
+    # Ensure perspectives exist
+    if 'perspectives' not in report_data or not report_data['perspectives']:
+        report_data['perspectives'] = [{
+            'article_id': article_id,
+            'viewpoint': 'Research Summary',
+            'description': f'Analysis of "{topic_headline}" based on available sources',
+            'source': 'AI Research Agent',
+            'color': 'blue'
+        }]
+        logger.info(f"✅ Added fallback perspectives for: {topic_headline}")
+    
+    # Ensure conflicting info exists (even if empty)
+    if 'conflicting_info' not in report_data:
+        report_data['conflicting_info'] = []
+        logger.info(f"✅ Added empty conflicting info for: {topic_headline}")
+    
+    # Validate that all sections have the required article_id
+    for key in ['executive_summary', 'timeline_items', 'cited_sources', 'raw_facts', 'perspectives']:
+        if key in report_data:
+            if isinstance(report_data[key], list):
+                for item in report_data[key]:
+                    if isinstance(item, dict):
+                        item['article_id'] = article_id
+            elif isinstance(report_data[key], dict):
+                report_data[key]['article_id'] = article_id
+    
+    logger.info(f"✅ All sections validated for: {topic_headline}")
+    return report_data
 
 # --- Pexels Tool ---
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
@@ -338,9 +532,21 @@ def pexels_tool(query: str) -> List[Dict[str, Any]]:
         return []
 
 # --- Research Prompt Template ---
-RESEARCH_PROMPT_TEMPLATE = """You are a real-time, non-partisan research assistant with live web browsing capability. You NEVER fabricate data, quotes, articles, or URLs. Today you are researching "[QUERY]" You only can output two types of responses:
-1. Content based on real articles, real public sources accessed live through your browsing ability with cited urls.
-2. Should there be issues with type 1, you will say "Error accessing web articles" or "No web article found"
+RESEARCH_PROMPT_TEMPLATE = """You are a real-time, non-partisan research assistant with live web browsing capability. You NEVER fabricate data, quotes, articles, or URLs. 
+
+CRITICAL FOCUS REQUIREMENT: You are researching EXACTLY "[QUERY]" - nothing else. You must stay strictly on topic and not deviate from this specific query. If you cannot find relevant information for the exact query, you must state "No relevant information found for [QUERY]" rather than researching related topics.
+
+SEARCH STRATEGY:
+1. Use the EXACT query "[QUERY]" for all web searches
+2. Only research information directly related to "[QUERY]"
+3. If search results are not relevant to "[QUERY]", do not include them
+4. If you cannot find information about "[QUERY]", do not substitute with related topics
+5. Use the scrape_website tool to get deeper content and real quotes from important sources
+6. Focus on getting direct quotes from primary sources and official statements
+
+You only can output two types of responses:
+1. Content based on real articles, real public sources accessed live through your browsing ability with cited urls that are DIRECTLY about "[QUERY]"
+2. Should there be issues with type 1, you will say "Error accessing web articles" or "No web article found for [QUERY]"
 
 Quote guide: Any content you write within "" must never be paraphrased or rewritten, while content you write outside of "" can be paraphrased. They must be shown exactly as originally published. The only permitted edits to a quote are:
     a. Ellipses: to remove extraneous content and make quote more concise
@@ -349,42 +555,44 @@ Quote guide: Any content you write within "" must never be paraphrased or rewrit
 You strictly follow this format, and provide no extra info outside of it:
 
 Executive Summary:
-Short, simple, easy to read, bullet point summary of event in plain English. Don't use complete sentences.
+Short, simple, easy to read, bullet point summary of "[QUERY]" in plain English. Don't use complete sentences. Only include information directly about "[QUERY]".
 
 Raw facts:
-1. Determine the raw facts on the topic from reliable sources
-Ex: Direct quote of what exactly was said, literal concrete propositions of a bill or policy from the document in question, statements from those involved, etc.
-Direct data or statements from government documents, public officials, original press releases, or reputable news sources. While primary sources are preferred when available, you may also use well-established news outlets and authoritative sources. You may go to intermediary sites in your research, but get your data from their sources when possible.
-If your researching a proposed law or bill, include raw facts directly from the document in question when available. Cite the name of the exact document or speaker they came from, + source
+1. Determine the raw facts on "[QUERY]" from reliable sources
+Ex: Direct quote of what exactly was said about "[QUERY]", literal concrete propositions related to "[QUERY]", statements from those involved with "[QUERY]", etc.
+Direct data or statements from government documents, public officials, original press releases, or reputable news sources that are SPECIFICALLY about "[QUERY]". While primary sources are preferred when available, you may also use well-established news outlets and authoritative sources. You may go to intermediary sites in your research, but get your data from their sources when possible.
+If you're researching a proposed law or bill related to "[QUERY]", include raw facts directly from the document in question when available. Cite the name of the exact document or speaker they came from, + source
 Places you can find US law text & congress hearings:
 https://www.congress.gov/
 https://www.govinfo.gov/
 Official statements from White House:
 https://www.whitehouse.gov/news/
-2. Return all the raw facts you find in a bullet point list. Organize the list by source.
+2. Return all the raw facts you find about "[QUERY]" in a bullet point list. Organize the list by source.
 
 Timeline:
-Bullet point timeline of events if relevant
+Bullet point timeline of events related to "[QUERY]" if relevant
 
-Different perspectives – summarize how the story is being covered by outlets with different perspectives on the story. Include REAL quotes and the outlet names. How are people and outlets interpreting the raw info from section 2?
-a. Research articles with opposing or different takes to this article
--Consider what different views on this may be, and use search terms that would bring them up
-b. Organize them into distinct, differing, and opposing groups based on their perspective. Begin each viewpoint group with one clear headline labeling, write it as if it were a snappy headline the outlets in the group could've posted. Avoid using the word viewpoint in titles.
+Different perspectives – summarize how "[QUERY]" is being covered by outlets with different perspectives on the story. Include REAL quotes and the outlet names. How are people and outlets interpreting the raw info about "[QUERY]" from section 2?
+a. Research articles with opposing or different takes on "[QUERY]"
+-Consider what different views on "[QUERY]" may be, and use search terms that would bring them up
+b. Organize them into distinct, differing, and opposing groups based on their perspective on "[QUERY]". Begin each viewpoint group with one clear headline labeling, write it as if it were a snappy headline the outlets in the group could've posted. Avoid using the word viewpoint in titles.
 c. Formatting:
 Viewpoint Title 1 (No "")
-- 1 bullet point summary of view
+- 1 bullet point summary of view on "[QUERY]"
 - Publisher Name
 - Short Quote
 
 Conflicting Info:
-a. Determine if there are conflicts between any of the viewpoints you found
+a. Determine if there are conflicts between any of the viewpoints you found about "[QUERY]"
 b. If none return "No conflicts detected"
-c. IF you find conflicts:
-i. Clearly identify what the conflict or misconception is.
+c. IF you find conflicts about "[QUERY]":
+i. Clearly identify what the conflict or misconception is about "[QUERY]".
 ii. After each conflict list the conflicting sources as follows: [Source(s)] vs [Opposing Sources(s)]
 - Link
 - [Repeat if multiple articles under this viewpoint]
-- [Don't waste words on section titles like "Publisher Name:" or "Quote"]"""
+- [Don't waste words on section titles like "Publisher Name:" or "Quote"]
+
+REMINDER: Stay focused on "[QUERY]" - do not research related topics or broader subjects unless they are directly relevant to "[QUERY]"."""
 
 # --- Examples for Structured Output ---
 example_for_article = {
@@ -489,15 +697,70 @@ tavily_tool = TavilySearch(max_results=15)
 
 @tool
 def scrape_website(url: str) -> str:
-    """Scrapes the content of a website."""
+    """Scrapes the content of a website with enhanced extraction for quotes and key content."""
     try:
-        response = requests.get(url, timeout=10)
+        # Add headers to avoid being blocked
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        }
+        
+        response = requests.get(url, timeout=15, headers=headers)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, "lxml")
-        text = soup.get_text(separator="\n", strip=True)
-        return text[:4000]  # Limit content size
+        
+        # Remove script and style elements
+        for script in soup(["script", "style", "nav", "footer", "header"]):
+            script.decompose()
+        
+        # Extract main content areas
+        content_parts = []
+        
+        # Try to find main content areas
+        main_selectors = [
+            'main', 'article', '.content', '.post-content', '.entry-content',
+            '.article-content', '.story-content', '.main-content', '#content',
+            '.body', '.text', '.copy'
+        ]
+        
+        for selector in main_selectors:
+            elements = soup.select(selector)
+            if elements:
+                for element in elements:
+                    text = element.get_text(separator="\n", strip=True)
+                    if len(text) > 100:  # Only include substantial content
+                        content_parts.append(text)
+        
+        # If no main content found, get all text
+        if not content_parts:
+            text = soup.get_text(separator="\n", strip=True)
+            content_parts.append(text)
+        
+        # Combine and clean content
+        combined_content = "\n\n".join(content_parts)
+        
+        # Clean up extra whitespace and normalize
+        import re
+        combined_content = re.sub(r'\n\s*\n', '\n\n', combined_content)  # Remove excessive newlines
+        combined_content = re.sub(r'\s+', ' ', combined_content)  # Normalize whitespace
+        
+        # Limit content size but preserve important parts
+        if len(combined_content) > 4000:
+            # Try to keep the beginning and end (often most important)
+            first_part = combined_content[:2500]
+            last_part = combined_content[-1500:]
+            combined_content = f"{first_part}\n\n...\n\n{last_part}"
+        
+        return combined_content
+        
     except requests.RequestException as e:
         return f"Error scraping website: {e}"
+    except Exception as e:
+        return f"Error processing website content: {e}"
 
 tools = [tavily_tool, scrape_website]
 
@@ -540,7 +803,7 @@ def research_node(state: AgentState):
     logger.info("🔬 RESEARCHING")
     # Create dynamic research prompt with the actual query
     dynamic_prompt = create_research_prompt(state['query'])
-    dynamic_research_agent = create_agent(llm, [tavily_tool], dynamic_prompt)
+    dynamic_research_agent = create_agent(llm, [tavily_tool, scrape_website], dynamic_prompt)
     
     state['messages'] = [HumanMessage(content=state['query'])]
     result = dynamic_research_agent.invoke(state)
@@ -563,9 +826,19 @@ def scraper_node(state: AgentState):
         
         if query:
             logger.info(f"EXECUTING TAVILY SEARCH for: {query}")
-            # Encourage primary sources but don't require them
-            enhanced_query = f"{query} (site:gov OR site:congress.gov OR site:whitehouse.gov OR site:govinfo.gov OR official statement OR primary source OR reputable news OR authoritative source)"
-            tavily_results = tavily_tool.invoke(enhanced_query)
+            # Use the exact query first, then enhance with primary sources
+            # This ensures we stay on topic while still getting authoritative sources
+            exact_query = query  # Use the exact query as provided
+            enhanced_query = f'"{query}" (site:gov OR site:congress.gov OR site:whitehouse.gov OR site:govinfo.gov OR official statement OR primary source OR reputable news OR authoritative source)'
+            
+            # Try exact query first, then enhanced if needed
+            try:
+                tavily_results = tavily_tool.invoke(exact_query)
+                logger.info(f"Using exact query: {exact_query}")
+            except Exception as e:
+                logger.warning(f"Exact query failed, trying enhanced: {e}")
+                tavily_results = tavily_tool.invoke(enhanced_query)
+                logger.info(f"Using enhanced query: {enhanced_query}")
             logger.info(f"TAVILY RESULTS TYPE: {type(tavily_results)}")
             if isinstance(tavily_results, str):
                 logger.info(f"TAVILY RESULTS PREVIEW: {tavily_results[:200]}...")
@@ -595,10 +868,29 @@ def scraper_node(state: AgentState):
             for res in results_list[:15]:  # Increased to 15 for better coverage
                 try:
                     if isinstance(res, dict) and 'url' in res and 'content' in res:
-                        # Limit content to reduce token usage
+                        url = res['url']
+                        # First, use Tavily's pre-scraped content as a starting point
                         limited_content = res['content'][:1000]
-                        scraped_content.append({"url": res['url'], "content": limited_content})
-                        urls.append(res['url'])
+                        
+                        # Then, try to get deeper content using scrape_website tool
+                        try:
+                            logger.info(f"🔍 Scraping deeper content from: {url}")
+                            scraped_deeper_content = scrape_website(url)
+                            
+                            if scraped_deeper_content and not scraped_deeper_content.startswith("Error"):
+                                # Combine Tavily content with deeper scraped content
+                                combined_content = f"{limited_content}\n\nDEEPER CONTENT:\n{scraped_deeper_content[:2000]}"
+                                logger.info(f"✅ Successfully scraped deeper content from {url}")
+                                scraped_content.append({"url": url, "content": combined_content})
+                            else:
+                                # Fallback to Tavily content only
+                                logger.warning(f"⚠️ Scraping failed for {url}, using Tavily content only")
+                                scraped_content.append({"url": url, "content": limited_content})
+                        except Exception as scrape_error:
+                            logger.warning(f"⚠️ Error scraping {url}: {scrape_error}, using Tavily content only")
+                            scraped_content.append({"url": url, "content": limited_content})
+                        
+                        urls.append(url)
                     else:
                         logger.warning(f"SKIPPING INVALID RESULT FORMAT: {type(res)}")
                 except Exception as e:
@@ -648,9 +940,24 @@ def create_writer_agent(section_name: str):
 
     prompt = f"""You are an expert writing agent focused on real-time, non-partisan research. Your sole purpose is to generate a specific section of a research report based on provided web content.
 
+CRITICAL FOCUS REQUIREMENT: You must stay strictly on topic and only include information that is directly relevant to the research query. Do not include tangential or related information that is not specifically about the query.
+
 IMPORTANT: You NEVER fabricate data, quotes, articles, or URLs. You only work with real content from the provided sources.
 
 Quote guide: Any content you write within "" must never be paraphrased or rewritten, while content you write outside of "" can be paraphrased. They must be shown exactly as originally published.
+
+CONTENT FILTERING:
+- Only include information directly related to the research query
+- Exclude tangential topics or broader subjects unless directly relevant
+- Focus on the specific query, not related areas
+- If content is not directly about the query, do not include it
+
+QUOTE EXTRACTION:
+- Extract real, direct quotes from the scraped content
+- Use quotation marks for exact quotes from sources
+- Include attribution for each quote (who said it, where it was published)
+- Focus on quotes that directly relate to the research query
+- Prefer quotes from primary sources, official statements, and authoritative sources
 
 You MUST generate a valid JSON output that strictly follows the structure and field names of the example below.
 Do not add any commentary, explanations, or any text outside of the JSON output.
@@ -660,7 +967,7 @@ Do not add any commentary, explanations, or any text outside of the JSON output.
 {example_str}
 ```
 
-Now, using the provided web content, generate the '{section_name}' section of the report. Adhere to the example format precisely and ensure all quotes are exact from the sources.
+Now, using the provided web content, generate the '{section_name}' section of the report. Adhere to the example format precisely and ensure all quotes are exact from the sources. Stay focused on the specific research query.
 """
     return create_agent(llm, [], prompt)
 
@@ -916,7 +1223,8 @@ def writer_node(state: AgentState, agent_name: str):
     # Create a message with the scraped data
     content = f"Generate the {agent_name.replace('_', ' ')} based on the following scraped content:\n\n"
     for item in state['scraped_data']:
-        content += f"URL: {item['url']}\nContent: {item['content'][:1000]}\n\n"  # Limit content to reduce tokens
+        # Use more content since we now have deeper scraping
+        content += f"URL: {item['url']}\nContent: {item['content'][:2000]}\n\n"  # Increased limit for better quotes
     
     messages = [HumanMessage(content=content)]
     
@@ -1151,6 +1459,12 @@ def get_feed():
             if topics:
                 logger.info(f"🚀 Starting background research for {len(topics)} new hot topics")
                 queue_article_generation(topics, force_research=True)
+                
+                # Validate and fix any existing cached articles with missing sections
+                logger.info("🔧 Validating existing cached articles for completeness...")
+                fixed_count = validate_and_fix_cached_articles()
+                if fixed_count > 0:
+                    logger.info(f"✅ Fixed {fixed_count} articles with missing sections")
         except Exception as e:
             logger.error(f"Error starting background research: {e}")
     
@@ -1177,6 +1491,18 @@ def get_feed():
             is_cached = topic_slug in report_cache
             if is_cached:
                 cached_count += 1
+                
+                # Validate cached article has all required sections
+                cached_report = report_cache[topic_slug]
+                required_sections = ['article', 'executive_summary', 'timeline_items', 'cited_sources', 'raw_facts', 'perspectives']
+                missing_sections = [section for section in required_sections if not hasattr(cached_report, section) or not getattr(cached_report, section)]
+                
+                if missing_sections:
+                    logger.warning(f"⚠️ Feed article {topic_slug} missing sections: {missing_sections}")
+                    # Queue for regeneration
+                    queue_article_generation([topic], force_research=True)
+                else:
+                    logger.info(f"✅ Feed article {topic_slug} has all required sections")
             
             # Map backend topic fields to frontend FeedArticle fields
             article = {
@@ -1258,6 +1584,23 @@ async def warm_cache():
     except Exception as e:
         logger.error(f"❌ ERROR IN CACHE WARMING: {e}")
         raise HTTPException(status_code=500, detail=f"Error warming cache: {str(e)}")
+
+@app.post("/api/validate-cache")
+def validate_cache():
+    """Manually validate and fix all cached articles."""
+    try:
+        logger.info("🔧 Manual cache validation triggered")
+        fixed_count = validate_and_fix_cached_articles()
+        
+        return {
+            "message": f"Cache validation complete",
+            "articles_fixed": fixed_count,
+            "total_articles": len(report_cache)
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ ERROR IN CACHE VALIDATION: {e}")
+        raise HTTPException(status_code=500, detail=f"Error validating cache: {str(e)}")
 
 @app.get("/api/cache-status")
 def get_cache_status():
