@@ -473,7 +473,7 @@ def brave_image_search(query: str, count: int = 5) -> List[str]:
             'count': min(count, 10),
             'search_lang': 'en',
             'country': 'US',
-            'safesearch': 'moderate',
+            'safesearch': 'strict',
             'size': 'large'
         }
         
@@ -705,13 +705,20 @@ tavily_tool = TavilySearch()
 tools = [tavily_tool, scrape_website, extract_article_images, brave_image_search, duckduckgo_image_search, unsplash_image_search, generate_contextual_image]
 
 # 2. Agent State
+def merge_research_reports(left: dict, right: dict) -> dict:
+    """Safely merge research report dictionaries."""
+    if not left:
+        return right
+    if not right:
+        return left
+    return {**left, **right}
+
 class AgentState(TypedDict):
     messages: Annotated[list, lambda x, y: x + y]
     query: str
     scraped_data: list
-    research_report: Optional[dict]
+    research_report: Annotated[Optional[dict], merge_research_reports]  # Fixed
     image_urls: Optional[dict]
-
 # 3. Agent and Graph Definition with optimized LLM
 llm = ChatOpenAI(
     model="gpt-4o-mini",  # Use mini model for better rate limits
