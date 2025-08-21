@@ -669,14 +669,14 @@ def generate_contextual_image(query: str, sources: List[str] = None) -> str:
     
     for category, enhanced_query in category_queries.items():
         if category.lower() in query.lower():
-            enhanced_images = brave_image_search(enhanced_query, count=1)
+            enhanced_images = brave_image_search.invoke({"query": enhanced_query, "count": 1})
             if enhanced_images:
                 logger.info(f"Using enhanced Brave search for category {category}")
                 return enhanced_images[0]
     
     # Strategy 4: Try DuckDuckGo as fallback
     logger.info(f"Trying DuckDuckGo image search for: {query}")
-    duckduckgo_images = duckduckgo_image_search(query, count=1)
+    duckduckgo_images = duckduckgo_image_search.invoke({"query": query, "count": 1})
     if duckduckgo_images:
         logger.info(f"Using DuckDuckGo image for query: {query}")
         return duckduckgo_images[0]
@@ -901,7 +901,7 @@ def scraper_node(state: AgentState):
                         # Then, try to get deeper content using scrape_website tool
                         try:
                             logger.info(f"Scraping deeper content from: {url}")
-                            scraped_deeper_content = scrape_website(url)
+                            scraped_deeper_content = scrape_website.invoke({"url": url})
                             
                             if scraped_deeper_content and not scraped_deeper_content.startswith("Error"):
                                 # Combine Tavily content with deeper scraped content
@@ -944,9 +944,15 @@ def image_fetcher_node(state: AgentState):
     source_urls = [item.get('url') for item in state.get('scraped_data', []) if item.get('url')]
     
     # Get hero image with improved search strategy
-    # CORRECT - use invoke method
-    hero_image_url = generate_contextual_image.invoke({"query": query, "sources": source_urls})
-    
+    # CORRECT
+    try:
+        hero_image_url = generate_contextual_image.invoke({
+            "query": query, 
+            "sources": source_urls
+        })
+    except Exception as e:
+        logger.error(f"Error getting hero image: {e}")
+        hero_image_url = "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800"
     # Get images for cited sources
     source_images = []
     research_report = state.get('research_report', {})
@@ -965,7 +971,7 @@ def image_fetcher_node(state: AgentState):
             # If no image from source, try contextual search
             if not source_image:
                 source_name = source.get('name', query)
-                contextual_images = brave_image_search(f"{query} {source_name}", count=1)
+                contextual_images = brave_image_search.invoke({"query": f"{query} {source_name}", "count": 1})
                 if contextual_images:
                     source_image = contextual_images[0]
                 else:
@@ -1402,19 +1408,17 @@ def validate_conflicting_info_quotes(conflicting_info_data):
 
 # Optimized writer_node with rate limit handling
 def writer_node(state: AgentState, agent_name: str):
-    """Writer node with rate limit handling."""
+    """Writer node with enhanced JSON error handling."""
     logger.info(f"Writing section: {agent_name}")
     agent = writer_agents[agent_name]
     
-    # Create a message with the scraped data
+    # Create message with scraped data
     content = f"Generate the {agent_name.replace('_', ' ')} based on the following scraped content:\n\n"
     for item in state['scraped_data']:
-        # Use more content since we now have deeper scraping
-        content += f"URL: {item['url']}\nContent: {item['content'][:2000]}\n\n"  # Increased limit for better quotes
+        content += f"URL: {item['url']}\nContent: {item['content'][:2000]}\n\n"
     
     messages = [HumanMessage(content=content)]
     
-    # Apply rate limiting to the agent invocation
     @with_rate_limit_retry(max_retries=3, base_delay=2)
     def invoke_agent():
         return agent.invoke({"messages": messages})
@@ -1422,30 +1426,55 @@ def writer_node(state: AgentState, agent_name: str):
     try:
         result = invoke_agent()
         
-        # Log the raw response from the model
-        logger.info(f"Raw response for {agent_name}: {str(result)[:200]}...")
-
         # Process the result
         if hasattr(result, 'content'):
             data_str = result.content
         else:
             data_str = str(result)
             
-        # Clean the string if it's wrapped in markdown
+        # Clean markdown wrapper
         if data_str.strip().startswith("```"):
             match = re.search(r'```(json)?\s*\n(.*?)\n\s*```', data_str, re.DOTALL)
             if match:
                 data_str = match.group(2)
-            
-        parsed_json = json.loads(data_str)
         
-        # Apply quote deduplication specifically for conflicting_info agent
+        # Enhanced JSON parsing with fallbacks
+        try:
+            parsed_json = json.loads(data_str)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error in {agent_name}: {e}")
+            logger.error(f"Raw content: {data_str}")
+            
+            # Try to fix common JSON issues
+            fixed_data_str = data_str.replace('\n', '').replace('\r', '')
+            # Fix trailing commas
+            fixed_data_str = re.sub(r',(\s*[}\]])', r'\1', fixed_data_str)
+            
+            try:
+                parsed_json = json.loads(fixed_data_str)
+                logger.info(f"Fixed JSON parsing for {agent_name}")
+            except json.JSONDecodeError:
+                # Return fallback structure
+                logger.warning(f"Using fallback structure for {agent_name}")
+                if agent_name == "raw_facts":
+                    parsed_json = [{"article_id": 0, "category": "research", "facts": []}]
+                elif agent_name == "executive_summary":
+                    parsed_json = {"article_id": 0, "points": []}
+                elif agent_name == "timeline_items":
+                    parsed_json = []
+                elif agent_name == "cited_sources":
+                    parsed_json = []
+                elif agent_name == "perspectives":
+                    parsed_json = []
+                elif agent_name == "conflicting_info":
+                    parsed_json = []
+                else:
+                    parsed_json = {}
+        
+        # Apply deduplication for conflicting_info
         if agent_name == "conflicting_info":
-            logger.info(f"Applying quote deduplication for {agent_name}")
             current_research_report = state.get('research_report', {})
             parsed_json = deduplicate_conflicting_quotes(parsed_json, current_research_report)
-            
-            # Final validation to ensure no duplicates remain
             validate_conflicting_info_quotes(parsed_json)
         
         logger.info(f"Section {agent_name} complete")
@@ -1455,7 +1484,7 @@ def writer_node(state: AgentState, agent_name: str):
         error_message = f"Error processing {agent_name}: {e}"
         logger.error(error_message)
         return {"messages": [HumanMessage(content=error_message)]}
-
+    
 # --- Aggregator Node ---
 def aggregator_node(state: AgentState):
     logger.info("Aggregating all the data")
