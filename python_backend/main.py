@@ -24,34 +24,10 @@ from dotenv import load_dotenv
 import requests
 from bs4 import BeautifulSoup
 from langchain_core.tools import tool
-from urllib.parse import urljoin, urlparse, quote
+from pexelsapi.pexels import Pexels
 from openai import RateLimitError
 
 from schemas import ResearchReport
-
-# Define scrape_website tool
-@tool
-def scrape_website(url: str) -> str:
-    """Scrape the main textual content from a website URL."""
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        }
-        response = requests.get(url, timeout=10, headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
-        # Extract main content from common tags
-        main_content = ''
-        for tag in ['article', '.main-content', '.content', '.post-content', 'body']:
-            section = soup.select_one(tag)
-            if section:
-                main_content = section.get_text(separator='\n', strip=True)
-                break
-        if not main_content:
-            main_content = soup.get_text(separator='\n', strip=True)
-        return main_content[:5000]  # Limit to 5000 chars
-    except Exception as e:
-        return f"Error scraping website: {e}"
 
 load_dotenv()
 
@@ -140,11 +116,11 @@ def queue_article_generation(topics, force_research=False):
         
         # Add new topics to queue
         article_generation_queue.extend(new_topics)
-        logger.info(f"Queued {len(new_topics)} new articles for generation (force_research={force_research})")
+        logger.info(f"📝 Queued {len(new_topics)} new articles for generation (force_research={force_research})")
     
     # Start background generation if not already running
     if not is_generating_articles and article_generation_queue:
-        logger.info("Starting background article generation")
+        logger.info("🚀 Starting background article generation")
         executor.submit(process_article_generation_queue)
 
 def process_article_generation_queue():
@@ -167,23 +143,23 @@ def process_article_generation_queue():
                 topic = article_generation_queue.pop(0)
             
             topic_name = topic.get('headline', 'Unknown')
-            logger.info(f"Generating article {processed_count + 1} for: {topic_name}")
+            logger.info(f"🔄 Generating article {processed_count + 1} for: {topic_name}")
             
             try:
                 # Check if already cached before processing (unless this is a forced refresh)
                 topic_slug = topic.get('slug', '')
                 if topic_slug in report_cache and not topic.get('force_research', False):
-                    logger.info(f"Article already cached: {topic_slug}")
+                    logger.info(f"✅ Article already cached: {topic_slug}")
                     continue
                 
-                logger.info(f"Starting generation for topic: {topic_name} (slug: {topic_slug})")
+                logger.info(f"🔄 Starting generation for topic: {topic_name} (slug: {topic_slug})")
                 
                 # Generate the article with retry logic
                 slug = generate_article_with_retry(topic)
                 
                 if slug:
                     processed_count += 1
-                    logger.info(f"Article generated and cached: {slug}")
+                    logger.info(f"✅ Article generated and cached: {slug}")
                     
                     # Verify the cached article has all required sections
                     if slug in report_cache:
@@ -192,32 +168,32 @@ def process_article_generation_queue():
                         missing_sections = [section for section in required_sections if not hasattr(cached_report, section) or not getattr(cached_report, section)]
                         
                         if missing_sections:
-                            logger.error(f"CRITICAL: Cached article {slug} is missing sections: {missing_sections}")
+                            logger.error(f"❌ CRITICAL: Cached article {slug} is missing sections: {missing_sections}")
                         else:
-                            logger.info(f"Cached article {slug} has all required sections")
+                            logger.info(f"✅ Cached article {slug} has all required sections")
                     else:
-                        logger.error(f"CRITICAL: Generated article {slug} not found in cache")
+                        logger.error(f"❌ CRITICAL: Generated article {slug} not found in cache")
                 else:
                     failed_count += 1
-                    logger.error(f"Failed to generate article for: {topic_name}")
+                    logger.error(f"❌ Failed to generate article for: {topic_name}")
                 
             except Exception as e:
                 failed_count += 1
-                logger.error(f"Error generating article for {topic_name}: {e}")
+                logger.error(f"❌ Error generating article for {topic_name}: {e}")
                 
                 # Re-queue the topic if it was a rate limit error
                 if "rate limit" in str(e).lower():
                     with article_generation_lock:
                         article_generation_queue.append(topic)
-                    logger.info(f"Re-queued {topic_name} due to rate limit")
+                    logger.info(f"🔄 Re-queued {topic_name} due to rate limit")
             
             # Mandatory delay between articles to respect rate limits
             time.sleep(5)  # 5 seconds between each article generation
             
-        logger.info(f"Background generation completed: {processed_count} successful, {failed_count} failed")
+        logger.info(f"🏁 Background generation completed: {processed_count} successful, {failed_count} failed")
     
     except Exception as e:
-        logger.error(f"Error in background article generation: {e}")
+        logger.error(f"❌ Error in background article generation: {e}")
     
     finally:
         with article_generation_lock:
@@ -244,7 +220,7 @@ async def generate_article_for_topic(topic):
             logger.info(f"Article already cached: {topic_slug}")
             return topic_slug
         
-        logger.info(f"Starting research for: {topic_headline}")
+        logger.info(f"🔬 Starting research for: {topic_headline}")
         
         # Create initial state for the research workflow
         initial_state = {
@@ -280,7 +256,7 @@ async def generate_article_for_topic(topic):
                     if i < len(final_state['image_urls']['source_images']):
                         source['image_url'] = final_state['image_urls']['source_images'][i]
                     else:
-                        source['image_url'] = "https://via.placeholder.com/400x300?text=Source+Image"
+                        source['image_url'] = "https://p-cdn.com/generic-source-logo.png"
         
         # Assemble final report
         article_id = int(uuid.uuid4().int & (1<<31)-1)
@@ -308,11 +284,11 @@ async def generate_article_for_topic(topic):
                     final_report_data[key]['article_id'] = article_id
         
         # ENSURE ALL REQUIRED SECTIONS EXIST - ROBUST VALIDATION
-        logger.info(f"Validating all report sections for: {topic_headline}")
+        logger.info(f"🔍 Validating all report sections for: {topic_headline}")
         
         # Ensure timeline_items exists and is not empty
         if 'timeline_items' not in final_report_data or not final_report_data['timeline_items']:
-            logger.warning(f"Missing timeline_items for {topic_headline} - creating fallback")
+            logger.warning(f"⚠️ Missing timeline_items for {topic_headline} - creating fallback")
             final_report_data['timeline_items'] = [{
                 'article_id': article_id,
                 'date': datetime.now().isoformat(),
@@ -322,11 +298,11 @@ async def generate_article_for_topic(topic):
                 'source_label': 'AI Research Agent'
             }]
         else:
-            logger.info(f"timeline_items found: {len(final_report_data['timeline_items'])} items")
+            logger.info(f"✅ timeline_items found: {len(final_report_data['timeline_items'])} items")
         
         # Ensure cited_sources exists and is not empty
         if 'cited_sources' not in final_report_data or not final_report_data['cited_sources']:
-            logger.warning(f"Missing cited_sources for {topic_headline} - creating fallback")
+            logger.warning(f"⚠️ Missing cited_sources for {topic_headline} - creating fallback")
             final_report_data['cited_sources'] = [{
                 'article_id': article_id,
                 'name': 'Research Sources',
@@ -336,22 +312,22 @@ async def generate_article_for_topic(topic):
                 'image_url': None
             }]
         else:
-            logger.info(f"cited_sources found: {len(final_report_data['cited_sources'])} sources")
+            logger.info(f"✅ cited_sources found: {len(final_report_data['cited_sources'])} sources")
         
         # Ensure raw_facts exists and is not empty
         if 'raw_facts' not in final_report_data or not final_report_data['raw_facts']:
-            logger.warning(f"Missing raw_facts for {topic_headline} - creating fallback")
+            logger.warning(f"⚠️ Missing raw_facts for {topic_headline} - creating fallback")
             final_report_data['raw_facts'] = [{
                 'article_id': article_id,
                 'category': 'research',
                 'facts': [f'Research was conducted on "{topic_headline}"']
             }]
         else:
-            logger.info(f"raw_facts found: {len(final_report_data['raw_facts'])} fact groups")
+            logger.info(f"✅ raw_facts found: {len(final_report_data['raw_facts'])} fact groups")
         
         # Ensure perspectives exists and is not empty
         if 'perspectives' not in final_report_data or not final_report_data['perspectives']:
-            logger.warning(f"Missing perspectives for {topic_headline} - creating fallback")
+            logger.warning(f"⚠️ Missing perspectives for {topic_headline} - creating fallback")
             final_report_data['perspectives'] = [{
                 'article_id': article_id,
                 'viewpoint': 'Research Summary',
@@ -360,11 +336,11 @@ async def generate_article_for_topic(topic):
                 'color': 'blue'
             }]
         else:
-            logger.info(f"perspectives found: {len(final_report_data['perspectives'])} perspectives")
+            logger.info(f"✅ perspectives found: {len(final_report_data['perspectives'])} perspectives")
         
         # Ensure executive_summary exists and is not empty
         if 'executive_summary' not in final_report_data or not final_report_data['executive_summary']:
-            logger.warning(f"Missing executive_summary for {topic_headline} - creating fallback")
+            logger.warning(f"⚠️ Missing executive_summary for {topic_headline} - creating fallback")
             final_report_data['executive_summary'] = {
                 'article_id': article_id,
                 'points': [
@@ -374,23 +350,23 @@ async def generate_article_for_topic(topic):
                 ]
             }
         else:
-            logger.info(f"executive_summary found with {len(final_report_data['executive_summary'].get('points', []))} points")
+            logger.info(f"✅ executive_summary found with {len(final_report_data['executive_summary'].get('points', []))} points")
         
         # Final validation check - ensure all required sections exist
         required_sections = ['article', 'executive_summary', 'timeline_items', 'cited_sources', 'raw_facts', 'perspectives']
         missing_sections = [section for section in required_sections if section not in final_report_data]
         
         if missing_sections:
-            logger.error(f"CRITICAL: Missing required sections for {topic_headline}: {missing_sections}")
+            logger.error(f"❌ CRITICAL: Missing required sections for {topic_headline}: {missing_sections}")
             raise ValueError(f"Missing required sections: {missing_sections}")
         else:
-            logger.info(f"All required sections validated for {topic_headline}")
+            logger.info(f"✅ All required sections validated for {topic_headline}")
         
         # Validate and cache the report
         validated_report = ResearchReport.model_validate(final_report_data)
         report_cache[topic_slug] = validated_report
         
-        logger.info(f"Article generated and cached: {topic_slug}")
+        logger.info(f"✅ Article generated and cached: {topic_slug}")
         return topic_slug
         
     except Exception as e:
@@ -403,7 +379,7 @@ def validate_and_fix_cached_articles():
     Validate all cached articles and fix any missing sections.
     This ensures feed reports are always complete.
     """
-    logger.info("Validating all cached articles for missing sections...")
+    logger.info("🔍 Validating all cached articles for missing sections...")
     
     fixed_count = 0
     total_articles = len(report_cache)
@@ -419,7 +395,7 @@ def validate_and_fix_cached_articles():
                     missing_sections.append(section)
             
             if missing_sections:
-                logger.warning(f"Article {slug} missing sections: {missing_sections} - attempting to fix")
+                logger.warning(f"⚠️ Article {slug} missing sections: {missing_sections} - attempting to fix")
                 
                 # Try to fix by regenerating the article
                 try:
@@ -434,495 +410,128 @@ def validate_and_fix_cached_articles():
                     # Regenerate the article
                     new_slug = generate_article_with_retry(topic)
                     if new_slug and new_slug in report_cache:
-                        logger.info(f"Successfully regenerated article {slug}")
+                        logger.info(f"✅ Successfully regenerated article {slug}")
                         fixed_count += 1
                     else:
-                        logger.error(f"Failed to regenerate article {slug}")
+                        logger.error(f"❌ Failed to regenerate article {slug}")
                         
                 except Exception as e:
-                    logger.error(f"Error fixing article {slug}: {e}")
+                    logger.error(f"❌ Error fixing article {slug}: {e}")
             else:
-                logger.info(f"Article {slug} has all required sections")
+                logger.info(f"✅ Article {slug} has all required sections")
                 
         except Exception as e:
-            logger.error(f"Error validating article {slug}: {e}")
+            logger.error(f"❌ Error validating article {slug}: {e}")
     
-    logger.info(f"Cache validation complete: {fixed_count}/{total_articles} articles fixed")
+    logger.info(f"🏁 Cache validation complete: {fixed_count}/{total_articles} articles fixed")
     return fixed_count
 
-# --- Enhanced Image Extraction Tools with Brave API ---
+def ensure_complete_report_sections(report_data, topic_headline, article_id):
+    """
+    Ensure all required sections exist in the report with fallback values.
+    This prevents missing sections when reports are generated.
+    """
+    logger.info(f"🔍 Validating report sections for: {topic_headline}")
+    
+    # Ensure article section exists
+    if 'article' not in report_data:
+        report_data['article'] = {}
+    
+    # Ensure executive summary exists
+    if 'executive_summary' not in report_data or not report_data['executive_summary']:
+        report_data['executive_summary'] = {
+            'article_id': article_id,
+            'points': [
+                f"Research conducted on {topic_headline}",
+                "Analysis based on current available sources",
+                "Comprehensive review of relevant information"
+            ]
+        }
+        logger.info(f"✅ Added fallback executive summary for: {topic_headline}")
+    
+    # Ensure timeline items exist
+    if 'timeline_items' not in report_data or not report_data['timeline_items']:
+        report_data['timeline_items'] = [{
+            'article_id': article_id,
+            'date': datetime.now().isoformat(),
+            'title': 'Research Initiated',
+            'description': f'Research on "{topic_headline}" was initiated',
+            'type': 'research_start',
+            'source_label': 'AI Research Agent'
+        }]
+        logger.info(f"✅ Added fallback timeline for: {topic_headline}")
+    
+    # Ensure cited sources exist
+    if 'cited_sources' not in report_data or not report_data['cited_sources']:
+        report_data['cited_sources'] = [{
+            'article_id': article_id,
+            'name': 'Research Sources',
+            'type': 'web_search',
+            'description': 'Various web sources consulted during research',
+            'url': 'https://example.com/research-sources',
+            'image_url': None
+        }]
+        logger.info(f"✅ Added fallback cited sources for: {topic_headline}")
+    
+    # Ensure raw facts exist
+    if 'raw_facts' not in report_data or not report_data['raw_facts']:
+        report_data['raw_facts'] = [{
+            'article_id': article_id,
+            'category': 'research',
+            'facts': [f'Research was conducted on "{topic_headline}"']
+        }]
+        logger.info(f"✅ Added fallback raw facts for: {topic_headline}")
+    
+    # Ensure perspectives exist
+    if 'perspectives' not in report_data or not report_data['perspectives']:
+        report_data['perspectives'] = [{
+            'article_id': article_id,
+            'viewpoint': 'Research Summary',
+            'description': f'Analysis of "{topic_headline}" based on available sources',
+            'source': 'AI Research Agent',
+            'color': 'blue'
+        }]
+        logger.info(f"✅ Added fallback perspectives for: {topic_headline}")
+    
+    # Ensure conflicting info exists (even if empty)
+    if 'conflicting_info' not in report_data:
+        report_data['conflicting_info'] = []
+        logger.info(f"✅ Added empty conflicting info for: {topic_headline}")
+    
+    # Validate that all sections have the required article_id
+    for key in ['executive_summary', 'timeline_items', 'cited_sources', 'raw_facts', 'perspectives']:
+        if key in report_data:
+            if isinstance(report_data[key], list):
+                for item in report_data[key]:
+                    if isinstance(item, dict):
+                        item['article_id'] = article_id
+            elif isinstance(report_data[key], dict):
+                report_data[key]['article_id'] = article_id
+    
+    logger.info(f"✅ All sections validated for: {topic_headline}")
+    return report_data
+
+# --- Pexels Tool ---
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
+if PEXELS_API_KEY:
+    pexels_api = Pexels(PEXELS_API_KEY)
+else:
+    pexels_api = None
+
 @tool
-def brave_image_search(query: str, count: int = 5) -> List[str]:
-    """Enhanced Brave Search for images with improved quality filtering."""
+def pexels_tool(query: str) -> List[Dict[str, Any]]:
+    """Searches for images on Pexels and returns a list of image URLs."""
+    if not pexels_api:
+        logger.warning("PEXELS API KEY NOT FOUND")
+        return []
     try:
-        brave_api_key = os.getenv('BRAVE_API_KEY')
-        if not brave_api_key:
-            logger.warning("BRAVE_API_KEY not found, skipping Brave image search")
-            return []
-        
-        url = "https://api.search.brave.com/res/v1/images/search"
-        
-        headers = {
-            'Accept': 'application/json',
-            'Accept-Encoding': 'gzip',
-            'X-Subscription-Token': brave_api_key
-        }
-        
-        params = {
-            'q': query,
-            'count': min(count * 2, 20),  # Get more results for better filtering
-            'search_lang': 'en',
-            'country': 'US',
-            'safesearch': 'strict',
-            'size': 'large',
-            'freshness': 'pw'  # Past week for recent images
-        }
-        
-        logger.info(f"Enhanced Brave search for images: {query}")
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        response.raise_for_status()
-        
-        data = response.json()
-        images = []
-        
-        if 'results' in data:
-            for result in data['results']:
-                if 'src' in result and len(images) < count:
-                    image_url = result.get('src', '')
-                    title = result.get('title', '').lower()
-                    
-                    # Enhanced quality filtering
-                    if (image_url and 
-                        image_url.startswith('http') and
-                        is_high_quality_image_url(image_url, query)):
-                        
-                        # Additional title relevance check
-                        query_keywords = extract_meaningful_keywords_from_query(query)
-                        title_relevance = any(keyword in title for keyword in query_keywords)
-                        
-                        # Basic quality checks
-                        quality_indicators = ['800', '1200', 'large', 'high']
-                        has_quality_indicator = any(indicator in image_url.lower() for indicator in quality_indicators)
-                        
-                        if title_relevance or has_quality_indicator or len(images) < 2:  # Ensure we get at least 2 images
-                            images.append(image_url)
-        
-        logger.info(f"Enhanced Brave returned {len(images)} quality images for query: {query}")
-        return images
-        
+        search_photos = pexels_api.search_photos(query, page=1, per_page=5)
+        return [{"url": photo['src']['original']} for photo in search_photos['photos']]
     except Exception as e:
-        logger.warning(f"Enhanced Brave image search failed for '{query}': {e}")
+        logger.error(f"PEXELS API ERROR: {e}")
         return []
 
-@tool
-def duckduckgo_image_search(query: str, count: int = 5) -> List[str]:
-    """Search for images using DuckDuckGo as a fallback option."""
-    try:
-        # DuckDuckGo instant answer API for images
-        url = "https://duckduckgo.com/"
-        
-        # First, get the vqd token
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        }
-        
-        params = {
-            'q': query,
-            'iax': 'images',
-            'ia': 'images'
-        }
-        
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        
-        # Extract vqd token from response
-        vqd_match = re.search(r'vqd=([\d-]+)', response.text)
-        if not vqd_match:
-            logger.warning("Could not extract vqd token from DuckDuckGo")
-            return []
-        
-        vqd = vqd_match.group(1)
-        
-        # Now search for images
-        image_url = "https://duckduckgo.com/i.js"
-        image_params = {
-            'l': 'us-en',
-            'o': 'json',
-            'q': query,
-            'vqd': vqd,
-            'f': ',,,,,',
-            'p': '1'
-        }
-        
-        image_response = requests.get(image_url, headers=headers, params=image_params, timeout=10)
-        image_response.raise_for_status()
-        
-        data = image_response.json()
-        images = []
-        
-        if 'results' in data:
-            for result in data['results'][:count]:
-                if 'image' in result:
-                    image_url = result['image']
-                    if image_url and image_url.startswith('http'):
-                        images.append(image_url)
-        
-        logger.info(f"DuckDuckGo returned {len(images)} images for query: {query}")
-        return images
-        
-    except Exception as e:
-        logger.warning(f"DuckDuckGo image search failed for '{query}': {e}")
-        return []
-
-@tool  
-def unsplash_image_search(query: str, count: int = 5) -> List[str]:
-    """Fallback image search using source.unsplash.com for random images."""
-    try:
-        # Use source.unsplash.com for random images without API key
-        base_url = "https://source.unsplash.com/800x600/"
-        query_terms = query.replace(' ', ',')
-        return [f"{base_url}?{query_terms}&{i}" for i in range(count)]
-        
-    except Exception as e:
-        logger.warning(f"Unsplash fallback failed for '{query}': {e}")
-        return []
-
-@tool
-def extract_article_images(url: str) -> List[str]:
-    """Extract images from article URLs using multiple strategies."""
-    images = []
-    
-    try:
-        # Add headers to avoid being blocked
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        }
-        
-        response = requests.get(url, timeout=10, headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Look for common article image selectors
-        image_selectors = [
-            'meta[property="og:image"]',
-            'meta[name="twitter:image"]', 
-            '.article-image img',
-            '.hero-image img',
-            '.featured-image img',
-            'article img',
-            '.content img',
-            '.post-content img'
-        ]
-        
-        for selector in image_selectors:
-            if selector.startswith('meta'):
-                meta_tag = soup.select_one(selector)
-                if meta_tag and meta_tag.get('content'):
-                    img_url = meta_tag.get('content')
-                    if img_url.startswith('http'):
-                        images.append(img_url)
-                        break
-            else:
-                img_tags = soup.select(selector)
-                for img in img_tags:
-                    src = img.get('src') or img.get('data-src')
-                    if src:
-                        # Convert relative URLs to absolute
-                        if src.startswith('//'):
-                            src = 'https:' + src
-                        elif src.startswith('/'):
-                            src = urljoin(url, src)
-                        elif not src.startswith('http'):
-                            src = urljoin(url, src)
-                        
-                        # Filter out small/icon images
-                        if not any(x in src.lower() for x in ['icon', 'logo', 'avatar', 'pixel.gif']):
-                            images.append(src)
-                            if len(images) >= 3:
-                                break
-                
-                if images:
-                    break
-                    
-    except Exception as e:
-        logger.warning(f"Failed to extract images from {url}: {e}")
-    
-    return images[:3]  # Return up to 3 images
-
-def create_enhanced_search_terms_for_images(query: str) -> list:
-    """Creates multiple enhanced search terms for better image results."""
-    # Extract meaningful keywords from query
-    keywords = extract_meaningful_keywords_from_query(query)
-    
-    # Category-specific enhancement terms
-    category_enhancements = {
-        "politics": ["government", "politics", "congress", "election", "policy", "capitol"],
-        "technology": ["technology", "innovation", "digital", "computer", "ai", "tech"],
-        "business": ["business", "finance", "economy", "market", "corporate", "trade"],
-        "health": ["health", "medical", "hospital", "research", "healthcare", "medicine"],
-        "environment": ["environment", "nature", "climate", "green", "sustainability"],
-        "international": ["world", "global", "international", "diplomacy", "foreign"],
-        "education": ["education", "school", "university", "research", "academic"],
-        "science": ["science", "research", "laboratory", "discovery", "innovation"]
-    }
-    
-    # Determine category from query
-    detected_category = None
-    for category, terms in category_enhancements.items():
-        if any(term in query.lower() for term in terms):
-            detected_category = category
-            break
-    
-    search_terms = []
-    
-    # Primary: Extracted keywords + category terms
-    if keywords and detected_category:
-        category_terms = category_enhancements[detected_category]
-        search_terms.append(f"{' '.join(keywords[:2])} {category_terms[0]}")
-        search_terms.append(f"{category_terms[0]} {' '.join(keywords[:1])}")
-    
-    # Secondary: Just extracted keywords
-    if keywords:
-        search_terms.append(' '.join(keywords[:3]))
-    
-    # Tertiary: Category-specific search
-    if detected_category:
-        category_terms = category_enhancements[detected_category]
-        search_terms.append(f"{category_terms[0]} {category_terms[1]}")
-    
-    # Quaternary: Original query with news context
-    search_terms.append(f"{query} news")
-    search_terms.append(query)
-    
-    return search_terms
-
-def extract_meaningful_keywords_from_query(query: str) -> list:
-    """Extracts meaningful keywords from query, excluding stop words."""
-    import re
-    
-    stop_words = {
-        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
-        'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did',
-        'will', 'would', 'should', 'could', 'can', 'may', 'might', 'this', 'that', 'these', 'those',
-        'who', 'what', 'where', 'when', 'why', 'how', 'which', 'whose'
-    }
-    
-    # Extract words that are likely to be meaningful for image search
-    words = re.findall(r'\w+', query.lower())
-    keywords = [
-        word for word in words 
-        if len(word) > 3 and word not in stop_words
-    ]
-    
-    return keywords[:4]  # Return top 4 meaningful keywords
-
-def is_high_quality_image_url(img_url: str, query: str) -> bool:
-    """Determines if an image URL indicates high quality and relevance."""
-    if not img_url or not img_url.startswith('http'):
-        return False
-    
-    # URL quality checks
-    low_quality_indicators = [
-        'thumbnail', 'thumb', 'avatar', 'icon', 'logo', 'badge', 'button',
-        'banner', 'ad', 'advertisement', 'profile', 'small', 'tiny'
-    ]
-    
-    # Check for low quality indicators in URL
-    url_lower = img_url.lower()
-    if any(indicator in url_lower for indicator in low_quality_indicators):
-        return False
-    
-    # Require proper image extensions
-    if not any(ext in url_lower for ext in ['.jpg', '.jpeg', '.png', '.webp']):
-        # Allow if no extension is specified (could be a dynamic URL)
-        if '.' in url_lower and not any(ext in url_lower for ext in ['.html', '.php', '.asp']):
-            return False
-    
-    # Prefer larger image size indicators
-    size_indicators = ['800', '1200', '1600', 'large', 'big', 'full', 'high']
-    has_good_size = any(size in url_lower for size in size_indicators)
-    
-    # Check for query relevance in URL
-    query_words = extract_meaningful_keywords_from_query(query)
-    url_relevance = any(word in url_lower for word in query_words)
-    
-    return has_good_size or url_relevance or len(url_lower) > 50  # Basic URL length check
-
-def get_enhanced_unsplash_image_for_query(query: str) -> str:
-    """Gets enhanced Unsplash images with dynamic search terms."""
-    # Extract keywords for dynamic search
-    keywords = extract_meaningful_keywords_from_query(query)
-    
-    # Category-specific Unsplash searches
-    category_searches = {
-        "politics": ["government", "politics", "capitol", "democracy"],
-        "technology": ["technology", "innovation", "digital", "future"],
-        "business": ["business", "finance", "corporate", "economy"],
-        "health": ["medical", "healthcare", "research", "science"],
-        "environment": ["nature", "environment", "climate", "sustainability"],
-        "international": ["world", "global", "international", "earth"],
-        "education": ["education", "university", "research", "academic"],
-        "science": ["science", "research", "laboratory", "innovation"]
-    }
-    
-    # Determine category from query
-    detected_category = None
-    for category, terms in category_searches.items():
-        if any(term in query.lower() for term in terms):
-            detected_category = category
-            break
-    
-    # Try dynamic search first with title keywords
-    if keywords:
-        if detected_category:
-            category_terms = category_searches[detected_category]
-            primary_search = "+".join(keywords[:2] + category_terms[:1])
-        else:
-            primary_search = "+".join(keywords[:3])
-        return f"https://source.unsplash.com/1200x800/?{primary_search}"
-    
-    # Fallback to category-specific search
-    if detected_category:
-        fallback_search = "+".join(category_searches[detected_category][:2])
-        return f"https://source.unsplash.com/1200x800/?{fallback_search}"
-    
-    # Final fallback
-    return f"https://source.unsplash.com/1200x800/?{query.replace(' ', '+')}"
-
-
-def get_category_fallback_image(query: str) -> str:
-    """Returns high-quality, category-appropriate fallback images based on query analysis."""
-    fallback_images = {
-        "politics": "https://images.unsplash.com/photo-1529107386315-e1a2ed48a620?w=1200&h=800&fit=crop&auto=format&q=80",
-        "technology": "https://images.unsplash.com/photo-1518709268805-4e9042af2176?w=1200&h=800&fit=crop&auto=format&q=80",
-        "business": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=1200&h=800&fit=crop&auto=format&q=80",
-        "health": "https://images.unsplash.com/photo-1576091160399-112ba8d25d1f?w=1200&h=800&fit=crop&auto=format&q=80",
-        "environment": "https://images.unsplash.com/photo-1569163139394-de4e4f43e4e5?w=1200&h=800&fit=crop&auto=format&q=80",
-        "international": "https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?w=1200&h=800&fit=crop&auto=format&q=80",
-        "education": "https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=1200&h=800&fit=crop&auto=format&q=80",
-        "science": "https://images.unsplash.com/photo-1567427017947-545c5f8d16ad?w=1200&h=800&fit=crop&auto=format&q=80",
-        "general": "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=1200&h=800&fit=crop&auto=format&q=80"
-    }
-    
-    # Determine category from query
-    query_lower = query.lower()
-    
-    category_keywords = {
-        "politics": ["government", "politics", "congress", "election", "policy", "trump", "biden", "president"],
-        "technology": ["technology", "ai", "artificial intelligence", "tech", "innovation", "digital", "software"],
-        "business": ["business", "economy", "market", "finance", "corporate", "trade", "economic"],
-        "health": ["health", "medical", "healthcare", "hospital", "medicine", "covid", "vaccine"],
-        "environment": ["environment", "climate", "green", "sustainability", "carbon", "renewable"],
-        "international": ["international", "global", "world", "foreign", "diplomacy", "war", "conflict"],
-        "education": ["education", "school", "university", "academic", "research", "study"],
-        "science": ["science", "research", "discovery", "innovation", "laboratory", "scientific"]
-    }
-    
-    # Find the best matching category
-    for category, keywords in category_keywords.items():
-        if any(keyword in query_lower for keyword in keywords):
-            return fallback_images[category]
-    
-    # Default fallback
-    return fallback_images["general"]
-
-@tool
-def generate_contextual_image(query: str, sources: List[str] = None) -> str:
-    """Generate contextual images using enhanced multi-strategy search with improved fallback hierarchy."""
-    
-    # Strategy 1: Enhanced Brave image search with multiple query attempts
-    logger.info(f"Trying enhanced Brave image search for: {query}")
-    
-    # Create enhanced search terms
-    search_terms = create_enhanced_search_terms_for_images(query)
-    
-    for search_query in search_terms:
-        brave_images = brave_image_search(search_query, count=5)
-        if brave_images:
-            # Filter for high-quality images
-            for img_url in brave_images:
-                if is_high_quality_image_url(img_url, query):
-                    logger.info(f"Using enhanced Brave image for query: {search_query}")
-                    return img_url
-    
-    # Strategy 2: If we have sources, try to extract images from them
-    if sources:
-        for source_url in sources[:3]:
-            try:
-                extracted_images = extract_article_images(source_url)
-                if extracted_images:
-                    # Validate extracted image quality
-                    for img_url in extracted_images:
-                        if is_high_quality_image_url(img_url, query):
-                            logger.info(f"Using validated extracted image from source: {source_url}")
-                            return img_url
-            except Exception as e:
-                logger.warning(f"Failed to extract image from {source_url}: {e}")
-                continue
-    
-    # Strategy 3: Enhanced Unsplash with dynamic search terms
-    logger.info(f"Trying enhanced Unsplash search for: {query}")
-    enhanced_unsplash_url = get_enhanced_unsplash_image_for_query(query)
-    if enhanced_unsplash_url:
-        logger.info(f"Using enhanced Unsplash image")
-        return enhanced_unsplash_url
-    
-    # Strategy 4: Try DuckDuckGo as fallback
-    logger.info(f"Trying DuckDuckGo image search for: {query}")
-    duckduckgo_images = duckduckgo_image_search(query, count=3)
-    if duckduckgo_images:
-        for img_url in duckduckgo_images:
-            if is_high_quality_image_url(img_url, query):
-                logger.info(f"Using DuckDuckGo image for query: {query}")
-                return img_url
-    
-    # Final fallback: High-quality category-appropriate images
-    fallback_image = get_category_fallback_image(query)
-    logger.info(f"Using high-quality fallback image for query: {query}")
-    return fallback_image
-
-tavily_tool = TavilySearch()
-tools = [tavily_tool, scrape_website, extract_article_images, brave_image_search, duckduckgo_image_search, unsplash_image_search, generate_contextual_image]
-
-# 2. Agent State
-def merge_research_reports(left: dict, right: dict) -> dict:
-    """Safely merge research report dictionaries."""
-    if not left:
-        return right
-    if not right:
-        return left
-    return {**left, **right}
-
-class AgentState(TypedDict):
-    messages: Annotated[list, lambda x, y: x + y]
-    query: str
-    scraped_data: list
-    research_report: Annotated[Optional[dict], merge_research_reports]  # Fixed
-    image_urls: Optional[dict]
-# 3. Agent and Graph Definition with optimized LLM
-llm = ChatOpenAI(
-    model="gpt-4o-mini",  # Use mini model for better rate limits
-    temperature=0,
-    max_tokens=1500,      # Limit tokens
-    request_timeout=30
-)
-
-def create_agent(llm, tools, system_prompt):
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", system_prompt),
-            MessagesPlaceholder(variable_name="messages"),
-        ]
-    )
-    return prompt | llm.bind_tools(tools)
-
-def agent_node(state, agent, name):
-    result = agent.invoke(state)
-    return {"messages": [result]}
-
-# --- Research Agent ---
-def create_research_prompt(query: str) -> str:
-    return RESEARCH_PROMPT_TEMPLATE.replace("[QUERY]", query)
-
+# --- Research Prompt Template ---
 RESEARCH_PROMPT_TEMPLATE = """You are a real-time, non-partisan research assistant with live web browsing capability. You NEVER fabricate data, quotes, articles, or URLs. 
 
 CRITICAL FOCUS REQUIREMENT: You are researching EXACTLY "[QUERY]" - nothing else. You must stay strictly on topic and not deviate from this specific query. If you cannot find relevant information for the exact query, you must state "No relevant information found for [QUERY]" rather than researching related topics.
@@ -1001,23 +610,225 @@ FINAL VALIDATION: Before submitting your response, review each section and ensur
 
 REMINDER: Stay focused on "[QUERY]" - do not research related topics or broader subjects unless they are directly relevant to "[QUERY]". If you cannot find enough information specifically about "[QUERY]", it is better to have a shorter, focused report than to include irrelevant information."""
 
-tavily_tool = TavilySearch()
+# --- Examples for Structured Output ---
+example_for_article = {
+    "title": "Research Report on [QUERY]",
+    "excerpt": "Comprehensive analysis based on real-time web research and primary sources.",
+    "content": "This report provides a detailed analysis based on live web research and primary source verification.",
+    "hero_image_url": "https://images.pexels.com/photos/12345/research-image.jpg"
+}
+
+example_for_executive_summary = {
+    "points": [
+        "Key finding 1 based on primary sources",
+        "Key finding 2 with direct citation",
+        "Key finding 3 from official documents"
+    ]
+}
+
+example_for_timeline_items = [
+    {
+        "date": "2024-01-01T00:00:00Z",
+        "title": "Event Title",
+        "description": "Description with direct quote from source",
+        "type": "Event Type",
+        "source_label": "Official Source Name",
+        "source_url": "https://official-source.gov/document"
+    }
+]
+
+example_for_cited_sources = [
+    {
+        "name": "Official Government Agency",
+        "type": "Primary Source",
+        "description": "Direct source of information",
+        "url": "https://official-source.gov"
+    }
+]
+
+example_for_raw_facts = [
+    {
+        "category": "Primary Source: [Source Name]",
+        "facts": [
+            "Direct quote from source",
+            "Literal statement from official document"
+        ]
+    }
+]
+
+example_for_perspectives = [
+    {
+        "viewpoint": "Perspective Headline",
+        "description": "Summary of this perspective",
+        "source": "Publisher Name",
+        "quote": "Exact quote from article",
+        "color": "blue",
+        "url": "https://publisher.com/article",
+        "reasoning": "Why this perspective matters",
+        "evidence": "Supporting evidence",
+        "conflict_source": "Opposing Source",
+        "conflict_quote": "Exact conflicting quote",
+        "conflict_url": "https://opposing-source.com/article"
+    }
+]
+
+example_for_conflicting_info = [
+    {
+        "conflict_id": "conflict_001",
+        "conflict_type": "factual_dispute",
+        "conflict_description": "Description of the specific conflict or contradiction",
+        "source_a": {
+            "name": "First Source Name",
+            "quote": "Exact quote from first source",
+            "url": "https://first-source.com/article",
+            "claim": "What this source claims"
+        },
+        "source_b": {
+            "name": "Opposing Source Name", 
+            "quote": "Exact conflicting quote from opposing source",
+            "url": "https://opposing-source.com/article",
+            "claim": "What the opposing source claims"
+        },
+        "resolution_status": "unresolved",
+        "severity": "high"
+    }
+]
+
+examples_map = {
+    "article": example_for_article,
+    "executive_summary": example_for_executive_summary,
+    "timeline_items": example_for_timeline_items,
+    "cited_sources": example_for_cited_sources,
+    "raw_facts": example_for_raw_facts,
+    "perspectives": example_for_perspectives,
+    "conflicting_info": example_for_conflicting_info
+}
+
+# Define a reducer function for merging dictionaries
+def merge_reports(dict1: dict, dict2: dict) -> dict:
+    return {**dict1, **dict2}
+
+# 1. Tool Setup
+tavily_tool = TavilySearch(max_results=15)
+
+@tool
+def scrape_website(url: str) -> str:
+    """Scrapes the content of a website with enhanced extraction for quotes and key content."""
+    try:
+        # Add headers to avoid being blocked
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        }
+        
+        response = requests.get(url, timeout=15, headers=headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, "lxml")
+        
+        # Remove script and style elements
+        for script in soup(["script", "style", "nav", "footer", "header"]):
+            script.decompose()
+        
+        # Extract main content areas
+        content_parts = []
+        
+        # Try to find main content areas
+        main_selectors = [
+            'main', 'article', '.content', '.post-content', '.entry-content',
+            '.article-content', '.story-content', '.main-content', '#content',
+            '.body', '.text', '.copy'
+        ]
+        
+        for selector in main_selectors:
+            elements = soup.select(selector)
+            if elements:
+                for element in elements:
+                    text = element.get_text(separator="\n", strip=True)
+                    if len(text) > 100:  # Only include substantial content
+                        content_parts.append(text)
+        
+        # If no main content found, get all text
+        if not content_parts:
+            text = soup.get_text(separator="\n", strip=True)
+            content_parts.append(text)
+        
+        # Combine and clean content
+        combined_content = "\n\n".join(content_parts)
+        
+        # Clean up extra whitespace and normalize
+        import re
+        combined_content = re.sub(r'\n\s*\n', '\n\n', combined_content)  # Remove excessive newlines
+        combined_content = re.sub(r'\s+', ' ', combined_content)  # Normalize whitespace
+        
+        # Limit content size but preserve important parts
+        if len(combined_content) > 4000:
+            # Try to keep the beginning and end (often most important)
+            first_part = combined_content[:2500]
+            last_part = combined_content[-1500:]
+            combined_content = f"{first_part}\n\n...\n\n{last_part}"
+        
+        return combined_content
+        
+    except requests.RequestException as e:
+        return f"Error scraping website: {e}"
+    except Exception as e:
+        return f"Error processing website content: {e}"
+
+tools = [tavily_tool, scrape_website]
+
+# 2. Agent State
+class AgentState(TypedDict):
+    messages: Annotated[list, lambda x, y: x + y]
+    query: str
+    scraped_data: list
+    research_report: Annotated[Optional[dict], merge_reports]
+    image_urls: Optional[dict]
+
+# 3. Agent and Graph Definition with optimized LLM
+llm = ChatOpenAI(
+    model="gpt-4o-mini",  # Use mini model for better rate limits
+    temperature=0,
+    max_tokens=1500,      # Limit tokens
+    request_timeout=30
+)
+
+def create_agent(llm, tools, system_prompt):
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", system_prompt),
+            MessagesPlaceholder(variable_name="messages"),
+        ]
+    )
+    return prompt | llm.bind_tools(tools)
+
+def agent_node(state, agent, name):
+    result = agent.invoke(state)
+    return {"messages": [result]}
+
+# --- Research Agent ---
+def create_research_prompt(query: str) -> str:
+    return RESEARCH_PROMPT_TEMPLATE.replace("[QUERY]", query)
+
 research_agent = create_agent(llm, [tavily_tool], create_research_prompt("placeholder"))
 
 def research_node(state: AgentState):
-    logger.info("RESEARCHING")
+    logger.info("🔬 RESEARCHING")
     # Create dynamic research prompt with the actual query
     dynamic_prompt = create_research_prompt(state['query'])
     dynamic_research_agent = create_agent(llm, [tavily_tool, scrape_website], dynamic_prompt)
     
     state['messages'] = [HumanMessage(content=state['query'])]
     result = dynamic_research_agent.invoke(state)
-    logger.info("RESEARCH COMPLETE")
+    logger.info("✅ RESEARCH COMPLETE")
     return {"messages": [result]}
 
 # --- Scraper Agent ---
 def scraper_node(state: AgentState):
-    logger.info("SCRAPING WEB FOR PRIMARY SOURCES")
+    logger.info("🔍 SCRAPING WEB FOR PRIMARY SOURCES")
     urls = []
     scraped_content = []
     if state['messages'][-1].tool_calls:
@@ -1079,20 +890,20 @@ def scraper_node(state: AgentState):
                         
                         # Then, try to get deeper content using scrape_website tool
                         try:
-                            logger.info(f"Scraping deeper content from: {url}")
-                            scraped_deeper_content = scrape_website.invoke({"url": url})
+                            logger.info(f"🔍 Scraping deeper content from: {url}")
+                            scraped_deeper_content = scrape_website(url)
                             
                             if scraped_deeper_content and not scraped_deeper_content.startswith("Error"):
                                 # Combine Tavily content with deeper scraped content
                                 combined_content = f"{limited_content}\n\nDEEPER CONTENT:\n{scraped_deeper_content[:2000]}"
-                                logger.info(f"Successfully scraped deeper content from {url}")
+                                logger.info(f"✅ Successfully scraped deeper content from {url}")
                                 scraped_content.append({"url": url, "content": combined_content})
                             else:
                                 # Fallback to Tavily content only
-                                logger.warning(f"Scraping failed for {url}, using Tavily content only")
+                                logger.warning(f"⚠️ Scraping failed for {url}, using Tavily content only")
                                 scraped_content.append({"url": url, "content": limited_content})
                         except Exception as scrape_error:
-                            logger.warning(f"Error scraping {url}: {scrape_error}, using Tavily content only")
+                            logger.warning(f"⚠️ Error scraping {url}: {scrape_error}, using Tavily content only")
                             scraped_content.append({"url": url, "content": limited_content})
                         
                         urls.append(url)
@@ -1105,151 +916,37 @@ def scraper_node(state: AgentState):
              logger.warning("NO TAVILY SEARCH TOOL CALL FOUND")
 
     logger.info(f"SCRAPING {len(urls)} PRIMARY SOURCE URLS")
-    logger.info("SCRAPING COMPLETE")
+    logger.info("✅ SCRAPING COMPLETE")
     return {"scraped_data": scraped_content, "messages": []}
 
-# --- Enhanced Image Fetcher Agent ---
-IMAGE_FETCHER_PROMPT = """You are an expert at finding contextually relevant images from news articles and search results.
-Your goal is to find the most appropriate images that match the research topic and enhance the article presentation.
-Focus on finding high-quality, relevant images that support the content being researched."""
-
-image_fetcher_agent = create_agent(llm, [extract_article_images, brave_image_search, duckduckgo_image_search, unsplash_image_search, generate_contextual_image], IMAGE_FETCHER_PROMPT)
+# --- Image Fetcher Agent ---
+IMAGE_FETCHER_PROMPT = """You are an expert image researcher. Your goal is to use the Pexels tool to find relevant images.
+For the main article, use the original user query to find a hero image.
+For the cited sources, use the title of each source to find a relevant image.
+You must return a dictionary where the keys are 'hero_image' and 'source_images' (a list of URLs)."""
+image_fetcher_agent = create_agent(llm, [pexels_tool], IMAGE_FETCHER_PROMPT)
 
 def image_fetcher_node(state: AgentState):
-    logger.info("FETCHING CONTEXTUAL IMAGES WITH ENHANCED SEARCH")
+    logger.info("🖼️ FETCHING IMAGES")
     
-    # Extract query and source URLs
-    query = state.get('query', '')
-    source_urls = [item.get('url') for item in state.get('scraped_data', []) if item.get('url')]
-    
-    # Get hero image with improved search strategy
-    # CORRECT
-    try:
-        hero_image_url = generate_contextual_image.invoke({
-            "query": query, 
-            "sources": source_urls
-        })
-    except Exception as e:
-        logger.error(f"Error getting hero image: {e}")
-        hero_image_url = "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800"
-    # Get images for cited sources
+    # Fetch hero image
+    hero_image_query = state['query']
+    hero_image_urls = pexels_tool.invoke(hero_image_query)
+    hero_image_url = hero_image_urls[0]['url'] if hero_image_urls else "https://images.pexels.com/photos/12345/flood-image.jpg"
+
+    # Fetch source images
     source_images = []
     research_report = state.get('research_report', {})
-    
     if 'cited_sources' in research_report:
-        for i, source in enumerate(research_report['cited_sources']):
-            source_image = None
+        for source in research_report['cited_sources']:
+            source_image_urls = pexels_tool.invoke(source['name'])
+            source_image_url = source_image_urls[0]['url'] if source_image_urls else "https://p-cdn.com/generic-source-logo.png"
+            source_images.append(source_image_url)
             
-            # Try to get image from specific source URL first
-            if i < len(source_urls):
-                source_url = source_urls[i]
-                source_img_list = extract_article_images(source_url)
-                if source_img_list:
-                    source_image = source_img_list[0]
-            
-            # If no image from source, try contextual search
-            if not source_image:
-                source_name = source.get('name', query)
-                contextual_images = brave_image_search.invoke({"query": f"{query} {source_name}", "count": 1})
-                if contextual_images:
-                    source_image = contextual_images[0]
-                else:
-                    # Final fallback for sources
-                    source_image = f"https://source.unsplash.com/400x300/?news,source&{i}"
-            
-            source_images.append(source_image)
-    
-    logger.info(f"CONTEXTUAL IMAGES FETCHED - Hero: {hero_image_url}, Sources: {len(source_images)}")
+    logger.info("✅ IMAGES FETCHED")
     return {"image_urls": {"hero_image": hero_image_url, "source_images": source_images}}
 
 # --- Writer Agents ---
-# Example data for each report section
-example_for_article = {
-    "title": "Sample Article Title",
-    "slug": "sample-article-title",
-    "id": 123456,
-    "read_time": 5,
-    "source_count": 3,
-    "published_at": "2024-01-01T00:00:00Z",
-    "category": "Research",
-    "author_name": "AI Agent",
-    "author_title": "Research Specialist",
-    "hero_image_url": "https://example.com/image.jpg"
-}
-example_for_executive_summary = {
-    "article_id": 123456,
-    "points": [
-        "Key finding 1 about the query",
-        "Key finding 2 about the query",
-        "Key finding 3 about the query"
-    ]
-}
-example_for_timeline_items = [
-    {
-        "article_id": 123456,
-        "date": "2024-01-01T00:00:00Z",
-        "title": "Event Title",
-        "description": "Description of the event",
-        "type": "event_type",
-        "source_label": "Source Name"
-    }
-]
-example_for_cited_sources = [
-    {
-        "article_id": 123456,
-        "name": "Source Name",
-        "type": "web_search",
-        "description": "Description of the source",
-        "url": "https://example.com/source",
-        "image_url": "https://example.com/source-image.jpg"
-    }
-]
-example_for_raw_facts = [
-    {
-        "article_id": 123456,
-        "category": "research",
-        "facts": [
-            "Fact 1 about the query",
-            "Fact 2 about the query"
-        ]
-    }
-]
-example_for_perspectives = [
-    {
-        "article_id": 123456,
-        "viewpoint": "Perspective Title",
-        "description": "Description of the perspective",
-        "source": "Source Name",
-        "color": "blue"
-    }
-]
-example_for_conflicting_info = [
-    {
-        "article_id": 123456,
-        "conflict": "Description of the conflict",
-        "source_a": {
-            "name": "Source A",
-            "quote": "Conflicting quote from Source A",
-            "url": "https://example.com/source-a"
-        },
-        "source_b": {
-            "name": "Source B",
-            "quote": "Conflicting quote from Source B",
-            "url": "https://example.com/source-b"
-        }
-    }
-]
-
-examples_map = {
-    "article": example_for_article,
-    "executive_summary": example_for_executive_summary,
-    "timeline_items": example_for_timeline_items,
-    "cited_sources": example_for_cited_sources,
-    "raw_facts": example_for_raw_facts,
-    "perspectives": example_for_perspectives,
-    "conflicting_info": example_for_conflicting_info
-}
-
 def create_writer_agent(section_name: str):
     example = examples_map.get(section_name)
     if not example:
@@ -1506,7 +1203,7 @@ def deduplicate_conflicting_quotes(conflicting_info_data, research_report):
                 quotes = re.findall(r'"([^"]*)"', item['description'])
                 existing_quotes.update(quotes)
     
-    logger.info(f"FOUND {len(existing_quotes)} EXISTING QUOTES FROM OTHER SECTIONS")
+    logger.info(f"🔍 FOUND {len(existing_quotes)} EXISTING QUOTES FROM OTHER SECTIONS")
     
     # Filter out conflicts that use duplicate quotes from other sections AND within conflicting_info
     unique_conflicts = []
@@ -1535,12 +1232,12 @@ def deduplicate_conflicting_quotes(conflicting_info_data, research_report):
             conflicting_sources_used.add(source_a_name)
             conflicting_sources_used.add(source_b_name)
         else:
-            logger.warning(f"REMOVING CONFLICT WITH DUPLICATES")
+            logger.warning(f"⚠️ REMOVING CONFLICT WITH DUPLICATES")
             logger.warning(f"Source A: {source_a_name} - {source_a_quote[:50]}...")
             logger.warning(f"Source B: {source_b_name} - {source_b_quote[:50]}...")
     
-    logger.info(f"FINAL QUOTES USED IN CONFLICTING_INFO: {len(set(conflicting_quotes_used))}")
-    logger.info(f"FINAL SOURCES USED IN CONFLICTING_INFO: {len(set(conflicting_sources_used))}")
+    logger.info(f"📊 FINAL QUOTES USED IN CONFLICTING_INFO: {len(set(conflicting_quotes_used))}")
+    logger.info(f"📊 FINAL SOURCES USED IN CONFLICTING_INFO: {len(set(conflicting_sources_used))}")
     return unique_conflicts
 
 def validate_conflicting_info_quotes(conflicting_info_data):
@@ -1548,7 +1245,7 @@ def validate_conflicting_info_quotes(conflicting_info_data):
     Manual validation function to check for duplicate quotes and sources in conflicting_info section.
     """
     if not conflicting_info_data or not isinstance(conflicting_info_data, list):
-        logger.error("INVALID CONFLICTING_INFO DATA")
+        logger.error("❌ INVALID CONFLICTING_INFO DATA")
         return False
     
     all_quotes = []
@@ -1577,27 +1274,29 @@ def validate_conflicting_info_quotes(conflicting_info_data):
     source_duplicates = len(all_sources) - len(unique_sources)
     
     if quote_duplicates == 0 and source_duplicates == 0:
-        logger.info(f"VALIDATION PASSED: No duplicate quotes or sources found in conflicting_info")
-        logger.info(f"Total quotes: {len(all_quotes)}, Unique quotes: {len(unique_quotes)}")
-        logger.info(f"Total sources: {len(all_sources)}, Unique sources: {len(unique_sources)}")
+        logger.info(f"✅ VALIDATION PASSED: No duplicate quotes or sources found in conflicting_info")
+        logger.info(f"📊 Total quotes: {len(all_quotes)}, Unique quotes: {len(unique_quotes)}")
+        logger.info(f"📊 Total sources: {len(all_sources)}, Unique sources: {len(unique_sources)}")
         return True
     else:
-        logger.error(f"VALIDATION FAILED: {quote_duplicates} duplicate quotes and {source_duplicates} duplicate sources found")
+        logger.error(f"❌ VALIDATION FAILED: {quote_duplicates} duplicate quotes and {source_duplicates} duplicate sources found")
         return False
 
 # Optimized writer_node with rate limit handling
 def writer_node(state: AgentState, agent_name: str):
-    """Writer node with enhanced JSON error handling."""
-    logger.info(f"Writing section: {agent_name}")
+    """Writer node with rate limit handling."""
+    logger.info(f"✍️ Writing section: {agent_name}")
     agent = writer_agents[agent_name]
     
-    # Create message with scraped data
+    # Create a message with the scraped data
     content = f"Generate the {agent_name.replace('_', ' ')} based on the following scraped content:\n\n"
     for item in state['scraped_data']:
-        content += f"URL: {item['url']}\nContent: {item['content'][:2000]}\n\n"
+        # Use more content since we now have deeper scraping
+        content += f"URL: {item['url']}\nContent: {item['content'][:2000]}\n\n"  # Increased limit for better quotes
     
     messages = [HumanMessage(content=content)]
     
+    # Apply rate limiting to the agent invocation
     @with_rate_limit_retry(max_retries=3, base_delay=2)
     def invoke_agent():
         return agent.invoke({"messages": messages})
@@ -1605,69 +1304,44 @@ def writer_node(state: AgentState, agent_name: str):
     try:
         result = invoke_agent()
         
+        # Log the raw response from the model
+        logger.info(f"Raw response for {agent_name}: {str(result)[:200]}...")
+
         # Process the result
         if hasattr(result, 'content'):
             data_str = result.content
         else:
             data_str = str(result)
             
-        # Clean markdown wrapper
+        # Clean the string if it's wrapped in markdown
         if data_str.strip().startswith("```"):
             match = re.search(r'```(json)?\s*\n(.*?)\n\s*```', data_str, re.DOTALL)
             if match:
                 data_str = match.group(2)
-        
-        # Enhanced JSON parsing with fallbacks
-        try:
-            parsed_json = json.loads(data_str)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error in {agent_name}: {e}")
-            logger.error(f"Raw content: {data_str}")
             
-            # Try to fix common JSON issues
-            fixed_data_str = data_str.replace('\n', '').replace('\r', '')
-            # Fix trailing commas
-            fixed_data_str = re.sub(r',(\s*[}\]])', r'\1', fixed_data_str)
-            
-            try:
-                parsed_json = json.loads(fixed_data_str)
-                logger.info(f"Fixed JSON parsing for {agent_name}")
-            except json.JSONDecodeError:
-                # Return fallback structure
-                logger.warning(f"Using fallback structure for {agent_name}")
-                if agent_name == "raw_facts":
-                    parsed_json = [{"article_id": 0, "category": "research", "facts": []}]
-                elif agent_name == "executive_summary":
-                    parsed_json = {"article_id": 0, "points": []}
-                elif agent_name == "timeline_items":
-                    parsed_json = []
-                elif agent_name == "cited_sources":
-                    parsed_json = []
-                elif agent_name == "perspectives":
-                    parsed_json = []
-                elif agent_name == "conflicting_info":
-                    parsed_json = []
-                else:
-                    parsed_json = {}
+        parsed_json = json.loads(data_str)
         
-        # Apply deduplication for conflicting_info
+        # Apply quote deduplication specifically for conflicting_info agent
         if agent_name == "conflicting_info":
+            logger.info(f"🔍 Applying quote deduplication for {agent_name}")
             current_research_report = state.get('research_report', {})
             parsed_json = deduplicate_conflicting_quotes(parsed_json, current_research_report)
+            
+            # Final validation to ensure no duplicates remain
             validate_conflicting_info_quotes(parsed_json)
         
-        logger.info(f"Section {agent_name} complete")
+        logger.info(f"✅ Section {agent_name} complete")
         return {"research_report": {agent_name: parsed_json}}
         
     except Exception as e:
         error_message = f"Error processing {agent_name}: {e}"
         logger.error(error_message)
         return {"messages": [HumanMessage(content=error_message)]}
-    
+
 # --- Aggregator Node ---
 def aggregator_node(state: AgentState):
-    logger.info("Aggregating all the data")
-    logger.info("AGGREGATION COMPLETE")
+    logger.info("🔄 Aggregating all the data")
+    logger.info("✅ AGGREGATION COMPLETE")
     return {}
 
 # 4. Graph Construction
@@ -1727,13 +1401,13 @@ class ResearchRequest(BaseModel):
 
 @app.post("/api/research")
 async def research(request: ResearchRequest):
-    logger.info(f"RECEIVED RESEARCH REQUEST: {request.query}")
+    logger.info(f"🚀 RECEIVED RESEARCH REQUEST: {request.query}")
     initial_state = {"query": request.query, "messages": [], "scraped_data": [], "research_report": {}, "image_urls": {}}
     
     final_report_data = {}
     
     # Using a single execution of the graph
-    logger.info("EXECUTING WORKFLOW")
+    logger.info("🔄 EXECUTING WORKFLOW")
     final_state = graph.invoke(initial_state, {"recursion_limit": 100})
     
     # Extract the research report from the final state
@@ -1749,9 +1423,9 @@ async def research(request: ResearchRequest):
                 if i < len(final_state['image_urls']['source_images']):
                     source['image_url'] = final_state['image_urls']['source_images'][i]
                 else:
-                    source['image_url'] = "https://via.placeholder.com/400x300?text=Source+Image"
+                    source['image_url'] = "https://p-cdn.com/generic-source-logo.png"
 
-    logger.info("ASSEMBLING FINAL REPORT")
+    logger.info("📝 ASSEMBLING FINAL REPORT")
     article_id = int(uuid.uuid4().int & (1<<31)-1)
     if 'article' in final_report_data:
         # Generate a unique slug for the article
@@ -1783,22 +1457,22 @@ async def research(request: ResearchRequest):
         report_slug = validated_report.article.slug
         report_cache[report_slug] = validated_report
         
-        logger.info(f"REPORT GENERATED AND CACHED. SLUG: {report_slug}")
+        logger.info(f"✅ REPORT GENERATED AND CACHED. SLUG: {report_slug}")
         
         # Return only the slug to the frontend
         return {"slug": report_slug}
         
     except Exception as e:
-        logger.error(f"FAILED TO GENERATE REPORT: {e}")
+        logger.error(f"❌ FAILED TO GENERATE REPORT: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate valid report: {e}\n\n{final_report_data}")
 
 @app.get("/api/article/{slug}", response_model=ResearchReport)
 async def get_article(slug: str):
-    logger.info(f"FETCHING ARTICLE WITH SLUG: {slug}")
+    logger.info(f"🔎 FETCHING ARTICLE WITH SLUG: {slug}")
     
     report = report_cache.get(slug)
     if not report:
-        logger.error(f"ARTICLE NOT FOUND IN CACHE")
+        logger.error(f"❌ ARTICLE NOT FOUND IN CACHE")
         
         # Check if it's in the generation queue
         with article_generation_lock:
@@ -1813,15 +1487,13 @@ async def get_article(slug: str):
         else:
             raise HTTPException(status_code=404, detail="Article not found")
     
-    logger.info("ARTICLE FOUND, RETURNING TO CLIENT")
+    logger.info("✅ ARTICLE FOUND, RETURNING TO CLIENT")
     return report
 
 @app.get("/api/feed")
 def get_feed():
     """Returns hot topics as a list of articles for the frontend."""
-    global last_server_refresh  # Add this line at the top
-    
-    logger.info("/API/FEED ENDPOINT HIT")
+    logger.info("📢 /API/FEED ENDPOINT HIT")
     
     # Check if it's time for universal refresh
     current_time = datetime.now()
@@ -1841,11 +1513,11 @@ def get_feed():
         
         should_refresh = True
         last_server_refresh = current_time
-        logger.info(f"Server refresh triggered at {current_time}")
+        logger.info(f"🔄 Server refresh triggered at {current_time}")
         
         # Clear the cache to force fresh data
         report_cache.clear()
-        logger.info(f"Cache cleared - {len(report_cache)} articles removed")
+        logger.info(f"🧹 Cache cleared - {len(report_cache)} articles removed")
         
         # Force background research for all new hot topics
         try:
@@ -1853,14 +1525,14 @@ def get_feed():
             topics_data = hot_topics_manager.get_cached_topics()
             topics = topics_data.get('topics', [])
             if topics:
-                logger.info(f"Starting background research for {len(topics)} new hot topics")
+                logger.info(f"🚀 Starting background research for {len(topics)} new hot topics")
                 queue_article_generation(topics, force_research=True)
                 
                 # Validate and fix any existing cached articles with missing sections
-                logger.info("Validating existing cached articles for completeness...")
+                logger.info("🔧 Validating existing cached articles for completeness...")
                 fixed_count = validate_and_fix_cached_articles()
                 if fixed_count > 0:
-                    logger.info(f"Fixed {fixed_count} articles with missing sections")
+                    logger.info(f"✅ Fixed {fixed_count} articles with missing sections")
         except Exception as e:
             logger.error(f"Error starting background research: {e}")
     
@@ -1894,11 +1566,11 @@ def get_feed():
                 missing_sections = [section for section in required_sections if not hasattr(cached_report, section) or not getattr(cached_report, section)]
                 
                 if missing_sections:
-                    logger.warning(f"Feed article {topic_slug} missing sections: {missing_sections}")
+                    logger.warning(f"⚠️ Feed article {topic_slug} missing sections: {missing_sections}")
                     # Queue for regeneration
                     queue_article_generation([topic], force_research=True)
                 else:
-                    logger.info(f"Feed article {topic_slug} has all required sections")
+                    logger.info(f"✅ Feed article {topic_slug} has all required sections")
             
             # Map backend topic fields to frontend FeedArticle fields
             article = {
@@ -1978,14 +1650,14 @@ async def warm_cache():
         }
         
     except Exception as e:
-        logger.error(f"ERROR IN CACHE WARMING: {e}")
+        logger.error(f"❌ ERROR IN CACHE WARMING: {e}")
         raise HTTPException(status_code=500, detail=f"Error warming cache: {str(e)}")
 
 @app.post("/api/validate-cache")
 def validate_cache():
     """Manually validate and fix all cached articles."""
     try:
-        logger.info("Manual cache validation triggered")
+        logger.info("🔧 Manual cache validation triggered")
         fixed_count = validate_and_fix_cached_articles()
         
         return {
@@ -1995,7 +1667,7 @@ def validate_cache():
         }
         
     except Exception as e:
-        logger.error(f"ERROR IN CACHE VALIDATION: {e}")
+        logger.error(f"❌ ERROR IN CACHE VALIDATION: {e}")
         raise HTTPException(status_code=500, detail=f"Error validating cache: {str(e)}")
 
 @app.get("/api/cache-status")
@@ -2038,7 +1710,7 @@ def get_cache_status():
         }
         
     except Exception as e:
-        logger.error(f"ERROR GETTING CACHE STATUS: {e}")
+        logger.error(f"❌ ERROR GETTING CACHE STATUS: {e}")
         return {
             "total_topics": 0,
             "cached_articles": len(report_cache),
@@ -2092,33 +1764,8 @@ async def generate_article_for_topic_endpoint(request: dict):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"ERROR IN MANUAL ARTICLE GENERATION: {e}")
+        logger.error(f"❌ ERROR IN MANUAL ARTICLE GENERATION: {e}")
         raise HTTPException(status_code=500, detail=f"Error generating article: {str(e)}")
-
-@app.get("/api/article/{slug}", response_model=ResearchReport)
-async def get_article(slug: str):
-    logger.info(f"FETCHING ARTICLE WITH SLUG: {slug}")
-    
-    report = report_cache.get(slug)
-    if not report:
-        logger.info(f"ARTICLE NOT FOUND IN CACHE: {slug}")
-        
-        # Check if it's in the generation queue
-        with article_generation_lock:
-            queued_headlines = [topic.get('headline', '') for topic in article_generation_queue]
-            is_queued = any(slug in headline.lower().replace(' ', '-') for headline in queued_headlines)
-        
-        if is_queued:
-            raise HTTPException(
-                status_code=202, 
-                detail="Article is being generated. Please try again in a few moments."
-            )
-        else:
-            # Return 404 so frontend can trigger research generation
-            raise HTTPException(status_code=404, detail="Article not found - research needed")
-    
-    logger.info("ARTICLE FOUND, RETURNING TO CLIENT")
-    return report
 
 @app.get("/api/rate-limit-status")
 async def get_rate_limit_status():
@@ -2167,7 +1814,7 @@ async def reset_rate_limits():
         is_generating_articles = False
         # Optionally clear the queue: article_generation_queue.clear()
     
-    logger.info("Rate limit reset triggered - pausing generation")
+    logger.info("🛑 Rate limit reset triggered - pausing generation")
     
     return {
         "message": "Generation paused to reset rate limits",
@@ -2212,11 +1859,11 @@ async def get_server_time():
         
         should_refresh = True
         last_server_refresh = current_time
-        logger.info(f"Server refresh triggered at {current_time}")
+        logger.info(f"🔄 Server refresh triggered at {current_time}")
         
         # Clear the cache to force fresh data
         report_cache.clear()
-        logger.info(f"Cache cleared - {len(report_cache)} articles removed")
+        logger.info(f"🧹 Cache cleared - {len(report_cache)} articles removed")
     
     return {
         "timestamp": current_time.isoformat(),
