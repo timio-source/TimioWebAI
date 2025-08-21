@@ -143,78 +143,71 @@ def get_fallback_news() -> List[Dict[str, Any]]:
 
 @tool
 def search_relevant_images(topic_title: str, category: str) -> str:
-    """Searches for relevant images using Brave Search API based on topic content."""
+    """Searches for relevant images using multiple strategies: Brave Search API, Unsplash, and fallbacks."""
     try:
-        # Get Brave Search API key from environment
+        # Strategy 1: Brave Search API (Primary)
         brave_api_key = os.getenv("BRAVE_API_KEY")
-        if not brave_api_key:
-            print("Warning: BRAVE_API_KEY not found, using fallback image")
-            return get_fallback_image(category)
-        
-        # Create search query based on topic and category
-        search_terms = {
-            "Politics": f"{topic_title} government politics news",
-            "Technology": f"{topic_title} technology innovation tech",
-            "Business": f"{topic_title} business economy finance",
-            "Health": f"{topic_title} health medical healthcare",
-            "Environment": f"{topic_title} environment climate sustainability",
-            "International": f"{topic_title} international global world",
-            "Education": f"{topic_title} education research academic",
-            "General": f"{topic_title} news current events"
-        }
-        
-        search_query = search_terms.get(category, f"{topic_title} news")
-        
-        # Brave Search API endpoint for images
-        url = "https://api.search.brave.com/res/v1/images/search"
-        headers = {
-            "Accept": "application/json",
-            "Accept-Encoding": "gzip",
-            "X-Subscription-Token": brave_api_key
-        }
-        
-        params = {
-            "q": search_query,
-            "count": 5,
-            "safesearch": "strict",
-            "search_lang": "en",
-            "country": "US",
-            "size": "large"
-        }
-        
-        print(f"Searching images for: {search_query}")
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            images = data.get("results", [])
-            
-            if images:
-                # Filter for high-quality images
-                for image in images:
-                    img_url = image.get("src", "")
-                    # Basic quality filters
-                    if (img_url and 
-                        not any(skip in img_url.lower() for skip in ['thumbnail', 'avatar', 'icon', 'logo']) and
-                        any(ext in img_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp'])):
-                        print(f"Found relevant image: {img_url}")
-                        return img_url
+        if brave_api_key:
+            try:
+                # Enhanced search terms based on category and title
+                search_terms = create_enhanced_search_terms(topic_title, category)
                 
-                # If no filtered image found, use first result
-                if images[0].get("src"):
-                    return images[0]["src"]
+                # Try multiple search queries for better results
+                for search_query in search_terms:
+                    print(f"Trying Brave Search with query: {search_query}")
+                    
+                    url = "https://api.search.brave.com/res/v1/images/search"
+                    headers = {
+                        "Accept": "application/json",
+                        "Accept-Encoding": "gzip",
+                        "X-Subscription-Token": brave_api_key
+                    }
+                    
+                    params = {
+                        "q": search_query,
+                        "count": 10,
+                        "safesearch": "strict",
+                        "search_lang": "en",
+                        "country": "US",
+                        "size": "large",
+                        "freshness": "pw"  # Past week for recent images
+                    }
+                    
+                    response = requests.get(url, headers=headers, params=params, timeout=10)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        images = data.get("results", [])
+                        
+                        # Filter for high-quality, relevant images
+                        for image in images:
+                            img_url = image.get("src", "")
+                            title = image.get("title", "").lower()
+                            
+                            # Quality and relevance filters
+                            if (img_url and 
+                                is_high_quality_image(img_url, title, topic_title, category)):
+                                print(f"Found high-quality Brave image: {img_url}")
+                                return img_url
+                        
+                        # If no filtered images, try first result
+                        if images and images[0].get("src"):
+                            return images[0]["src"]
+                            
+            except Exception as e:
+                print(f"Brave Search failed: {e}")
         
-        else:
-            print(f"Brave Search API error: {response.status_code} - {response.text}")
+        # Strategy 2: Enhanced Unsplash with specific search terms
+        unsplash_url = get_enhanced_unsplash_image(topic_title, category)
+        if unsplash_url:
+            print(f"Using enhanced Unsplash image: {unsplash_url}")
+            return unsplash_url
         
-        # Fallback if no images found
+        # Strategy 3: Category-specific fallback
         return get_fallback_image(category)
         
-    except requests.exceptions.RequestException as e:
-        print(f"Network error searching for images: {e}")
-        return get_fallback_image(category)
     except Exception as e:
-        print(f"Error searching for images: {e}")
+        print(f"Error in search_relevant_images: {e}")
         return get_fallback_image(category)
 
 def get_fallback_image(category: str) -> str:
@@ -513,9 +506,150 @@ def hot_topic_generator_node(state: HotTopicState):
         }
         return {"hot_topics": fallback_topics, "messages": [result] if 'result' in locals() else []}
 
+def create_enhanced_search_terms(topic_title: str, category: str) -> list:
+    """Creates multiple search terms for better image results."""
+    # Extract key terms from title
+    title_keywords = extract_meaningful_keywords(topic_title)
+    
+    # Category-specific terms
+    category_terms = {
+        "Politics": ["government", "politics", "congress", "election", "policy", "capitol", "washington"],
+        "Technology": ["technology", "innovation", "digital", "computer", "ai", "tech", "future"],
+        "Business": ["business", "finance", "economy", "market", "corporate", "money", "trade"],
+        "Health": ["health", "medical", "hospital", "research", "healthcare", "medicine", "doctor"],
+        "Environment": ["environment", "nature", "climate", "green", "sustainability", "earth", "renewable"],
+        "International": ["world", "global", "international", "diplomacy", "flags", "united nations"],
+        "Education": ["education", "school", "university", "research", "academic", "learning", "study"],
+        "General": ["news", "current events", "breaking news", "journalism", "media"]
+    }
+    
+    terms = category_terms.get(category, category_terms["General"])
+    
+    # Create multiple search queries
+    search_terms = []
+    
+    # Primary: Category + key keywords
+    if title_keywords:
+        search_terms.append(f"{terms[0]} {' '.join(title_keywords[:2])}")
+    
+    # Secondary: Just category terms
+    search_terms.append(f"{terms[0]} {terms[1]}")
+    
+    # Tertiary: News-related terms
+    search_terms.append(f"news {category.lower()}")
+    
+    return search_terms
+
+def extract_meaningful_keywords(title: str) -> list:
+    """Extracts meaningful keywords from title, excluding stop words."""
+    stop_words = {
+        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
+        'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did',
+        'will', 'would', 'should', 'could', 'can', 'may', 'might', 'this', 'that', 'these', 'those'
+    }
+    
+    # Extract words that are likely to be meaningful for image search
+    words = re.findall(r'\w+', title.lower())
+    keywords = [
+        word for word in words 
+        if len(word) > 3 and word not in stop_words
+    ]
+    
+    return keywords[:4]  # Return top 4 meaningful keywords
+
+def is_high_quality_image(img_url: str, img_title: str, topic_title: str, category: str) -> bool:
+    """Determines if an image is high quality and relevant."""
+    # URL quality checks
+    low_quality_indicators = [
+        'thumbnail', 'thumb', 'avatar', 'icon', 'logo', 'badge', 'button',
+        'banner', 'ad', 'advertisement', 'profile', 'small', 'tiny'
+    ]
+    
+    # Check for low quality indicators in URL
+    url_lower = img_url.lower()
+    if any(indicator in url_lower for indicator in low_quality_indicators):
+        return False
+    
+    # Require proper image extensions
+    if not any(ext in url_lower for ext in ['.jpg', '.jpeg', '.png', '.webp']):
+        return False
+    
+    # Size indicators in URL (prefer larger images)
+    size_indicators = ['800', '1200', '1600', 'large', 'big', 'full']
+    has_size_indicator = any(size in url_lower for size in size_indicators)
+    
+    # Relevance check using title keywords
+    topic_keywords = extract_meaningful_keywords(topic_title)
+    title_lower = img_title.lower()
+    
+    # Check if image title contains relevant keywords
+    relevance_score = sum(1 for keyword in topic_keywords if keyword in title_lower)
+    
+    # Category relevance
+    category_keywords = {
+        "Politics": ["political", "government", "congress", "election", "policy"],
+        "Technology": ["tech", "digital", "computer", "innovation"],
+        "Business": ["business", "corporate", "financial", "economic"],
+        "Health": ["medical", "health", "hospital", "healthcare"],
+        "Environment": ["environmental", "nature", "climate", "green"],
+        "International": ["international", "global", "world"],
+        "Education": ["education", "academic", "university", "research"]
+    }
+    
+    category_relevance = any(
+        keyword in title_lower 
+        for keyword in category_keywords.get(category, [])
+    )
+    
+    # Return True if image meets quality and relevance criteria
+    return (has_size_indicator or relevance_score > 0 or category_relevance)
+
+def get_enhanced_unsplash_image(topic_title: str, category: str) -> str:
+    """Gets enhanced Unsplash images with dynamic search terms."""
+    # Extract keywords for dynamic search
+    keywords = extract_meaningful_keywords(topic_title)
+    
+    # Category-specific Unsplash collections and search terms
+    category_searches = {
+        "Politics": ["government", "politics", "capitol", "democracy"],
+        "Technology": ["technology", "innovation", "digital", "future"],
+        "Business": ["business", "finance", "corporate", "economy"],
+        "Health": ["medical", "healthcare", "research", "science"],
+        "Environment": ["nature", "environment", "climate", "sustainability"],
+        "International": ["world", "global", "international", "earth"],
+        "Education": ["education", "university", "research", "academic"],
+        "General": ["news", "media", "communication", "information"]
+    }
+    
+    search_terms = category_searches.get(category, category_searches["General"])
+    
+    # Try dynamic search first with title keywords
+    if keywords:
+        primary_search = "+".join(keywords[:2] + search_terms[:1])
+        return f"https://source.unsplash.com/1200x800/?{primary_search}"
+    
+    # Fallback to category-specific search
+    fallback_search = "+".join(search_terms[:2])
+    return f"https://source.unsplash.com/1200x800/?{fallback_search}"
+
+def get_fallback_image(category: str) -> str:
+    """Returns high-quality, category-appropriate fallback images."""
+    fallback_images = {
+        "Politics": "https://images.unsplash.com/photo-1529107386315-e1a2ed48a620?w=1200&h=800&fit=crop&auto=format&q=80",
+        "Technology": "https://images.unsplash.com/photo-1518709268805-4e9042af2176?w=1200&h=800&fit=crop&auto=format&q=80",
+        "Business": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=1200&h=800&fit=crop&auto=format&q=80",
+        "Health": "https://images.unsplash.com/photo-1576091160399-112ba8d25d1f?w=1200&h=800&fit=crop&auto=format&q=80",
+        "Environment": "https://images.unsplash.com/photo-1569163139394-de4e4f43e4e5?w=1200&h=800&fit=crop&auto=format&q=80",
+        "International": "https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?w=1200&h=800&fit=crop&auto=format&q=80",
+        "Education": "https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=1200&h=800&fit=crop&auto=format&q=80",
+        "General": "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=1200&h=800&fit=crop&auto=format&q=80"
+    }
+    
+    return fallback_images.get(category, fallback_images["General"])
+
 def image_fetcher_node(state: HotTopicState):
-    """Fetches relevant images for hot topics using Brave Search API."""
-    print("--- 🖼️ FETCHING RELEVANT IMAGES ---")
+    """Enhanced image fetcher with multiple fallback strategies."""
+    print("--- 🖼️ FETCHING RELEVANT IMAGES WITH ENHANCED STRATEGY ---")
     
     image_urls = {}
     
@@ -524,25 +658,36 @@ def image_fetcher_node(state: HotTopicState):
             headline = topic.get('headline', '')
             category = topic.get('category', 'General')
             
-            print(f"--- Searching image for topic {i+1}: {headline} (Category: {category}) ---")
+            print(f"--- Searching enhanced image for topic {i+1}: {headline} (Category: {category}) ---")
             
             try:
-                # Search for relevant image based on headline and category
+                # Use enhanced image search
                 image_url = search_relevant_images.invoke({
                     "topic_title": headline,
                     "category": category
                 })
                 
-                image_urls[f"topic_{i}"] = image_url
-                print(f"--- ✅ Found image for topic {i+1}: {image_url} ---")
+                # Validate the image URL
+                if image_url and image_url.startswith('http'):
+                    image_urls[f"topic_{i}"] = image_url
+                    print(f"--- ✅ Enhanced image found for topic {i+1}: {image_url} ---")
+                else:
+                    # Fallback if search failed
+                    fallback_url = get_fallback_image(category)
+                    image_urls[f"topic_{i}"] = fallback_url
+                    print(f"--- 🔄 Using fallback image for topic {i+1}: {fallback_url} ---")
                 
             except Exception as e:
                 print(f"--- ❌ Error fetching image for topic {i+1}: {e} ---")
                 # Use fallback image
-                image_urls[f"topic_{i}"] = get_fallback_image(category)
+                fallback_url = get_fallback_image(category)
+                image_urls[f"topic_{i}"] = fallback_url
+                print(f"--- 🔄 Using error fallback for topic {i+1}: {fallback_url} ---")
     
-    print(f"--- 🖼️ FETCHED {len(image_urls)} IMAGES ---")
+    print(f"--- 🖼️ FETCHED {len(image_urls)} ENHANCED IMAGES ---")
     return {"image_urls": image_urls, "messages": []}
+
+
 
 def aggregator_node(state: HotTopicState):
     """Combines all data into final hot topics."""
@@ -694,6 +839,33 @@ def health_check():
         "brave_api_configured": bool(os.getenv("BRAVE_API_KEY")),
         "tavily_api_configured": bool(os.getenv("TAVILY_API_KEY"))
     }
+
+# Additional endpoint to test image search
+@app.get("/api/test-image-search")
+def test_image_search(topic: str = "technology innovation", category: str = "Technology"):
+    """Test the enhanced image search functionality."""
+    try:
+        image_url = search_relevant_images.invoke({
+            "topic_title": topic,
+            "category": category
+        })
+        
+        return {
+            "success": True,
+            "topic": topic,
+            "category": category,
+            "image_url": image_url,
+            "search_strategy": "enhanced_multi_fallback",
+            "brave_api_configured": bool(os.getenv("BRAVE_API_KEY"))
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "topic": topic,
+            "category": category,
+            "fallback_image": get_fallback_image(category)
+        }
 
 @app.get("/api/feed")
 def get_feed():

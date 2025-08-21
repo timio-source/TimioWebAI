@@ -29,6 +29,139 @@ interface FeedArticle {
   authorTitle?: string;
 }
 
+// Enhanced image URL generation with multiple fallback strategies
+const generateEnhancedImageUrl = (article: FeedArticle): string => {
+  // If article already has a valid image URL, use it
+  if (article.heroImageUrl && 
+      article.heroImageUrl !== 'heroImageUrl' && 
+      article.heroImageUrl.startsWith('http')) {
+    return article.heroImageUrl;
+  }
+
+  // Strategy 1: Extract keywords from title for dynamic search
+  const keywords = extractKeywords(article.title);
+  
+  // Strategy 2: Category-based Unsplash images with dynamic search
+  if (keywords.length > 0) {
+    const searchQuery = keywords.slice(0, 2).join('+');
+    const categoryTerm = getCategorySearchTerm(article.category);
+    return `https://source.unsplash.com/1200x800/?${searchQuery}+${categoryTerm}+news`;
+  }
+
+  // Strategy 3: Category-specific high-quality images
+  return getCategoryFallbackImage(article.category);
+};
+
+// Extract meaningful keywords from title, excluding stop words
+const extractKeywords = (title: string): string[] => {
+  const stopWords = new Set([
+    'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
+    'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did',
+    'will', 'would', 'should', 'could', 'can', 'may', 'might', 'this', 'that', 'these', 'those'
+  ]);
+  
+  return title
+    .toLowerCase()
+    .replace(/[^\w\s]/g, '') // Remove punctuation
+    .split(' ')
+    .filter(word => word.length > 3 && !stopWords.has(word))
+    .slice(0, 3); // Take top 3 meaningful keywords
+};
+
+// Get category-specific search terms for dynamic image search
+const getCategorySearchTerm = (category: string): string => {
+  const categoryTerms: Record<string, string> = {
+    'Politics': 'government',
+    'Technology': 'technology',
+    'Business': 'business',
+    'Health': 'medical',
+    'Environment': 'nature',
+    'International': 'world',
+    'Education': 'education',
+    'General': 'news'
+  };
+  
+  return categoryTerms[category] || 'news';
+};
+
+// High-quality category-specific fallback images
+const getCategoryFallbackImage = (category: string): string => {
+  const fallbackImages: Record<string, string> = {
+    'Politics': 'https://images.unsplash.com/photo-1529107386315-e1a2ed48a620?w=1200&h=800&fit=crop&auto=format&q=80',
+    'Technology': 'https://images.unsplash.com/photo-1518709268805-4e9042af2176?w=1200&h=800&fit=crop&auto=format&q=80',
+    'Business': 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=1200&h=800&fit=crop&auto=format&q=80',
+    'Health': 'https://images.unsplash.com/photo-1576091160399-112ba8d25d1f?w=1200&h=800&fit=crop&auto=format&q=80',
+    'Environment': 'https://images.unsplash.com/photo-1569163139394-de4e4f43e4e5?w=1200&h=800&fit=crop&auto=format&q=80',
+    'International': 'https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?w=1200&h=800&fit=crop&auto=format&q=80',
+    'Education': 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=1200&h=800&fit=crop&auto=format&q=80',
+    'General': 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=1200&h=800&fit=crop&auto=format&q=80'
+  };
+  
+  return fallbackImages[category] || fallbackImages['General'];
+};
+
+// Smart image component with progressive fallback strategy
+const SmartArticleImage = ({ article, className }: { article: FeedArticle; className: string }) => {
+  const [currentImageUrl, setCurrentImageUrl] = useState<string>(generateEnhancedImageUrl(article));
+  const [isLoading, setIsLoading] = useState(true);
+  const [fallbackIndex, setFallbackIndex] = useState(0);
+  
+  // Progressive fallback strategy
+  const fallbackUrls = [
+    generateEnhancedImageUrl(article), // Primary: Enhanced generated URL
+    `https://source.unsplash.com/1200x800/?${getCategorySearchTerm(article.category)}+news`, // Secondary: Category search
+    getCategoryFallbackImage(article.category), // Tertiary: Category fallback
+    'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=1200&h=800&fit=crop&auto=format&q=80' // Final: Generic news
+  ];
+
+  const handleImageError = () => {
+    if (fallbackIndex < fallbackUrls.length - 1) {
+      const nextIndex = fallbackIndex + 1;
+      setFallbackIndex(nextIndex);
+      setCurrentImageUrl(fallbackUrls[nextIndex]);
+      setIsLoading(true); // Reset loading state for new image
+    } else {
+      setIsLoading(false);
+    }
+  };
+
+  const handleImageLoad = () => {
+    setIsLoading(false);
+  };
+
+  return (
+    <div className="relative overflow-hidden">
+      {isLoading && (
+        <div className="absolute inset-0 bg-gradient-to-br from-gray-100 to-gray-200 animate-pulse flex items-center justify-center">
+          <div className="text-gray-400">
+            <TrendingUp className="h-8 w-8" />
+          </div>
+        </div>
+      )}
+      
+      <img 
+        src={currentImageUrl}
+        alt={article.title}
+        className={className}
+        loading="lazy"
+        onError={handleImageError}
+        onLoad={handleImageLoad}
+        style={{ display: isLoading ? 'none' : 'block' }}
+      />
+      
+      {/* Fallback gradient background if all images fail */}
+      {!isLoading && fallbackIndex >= fallbackUrls.length - 1 && (
+        <div className="w-full h-48 bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center">
+          <div className="text-center text-blue-600">
+            <TrendingUp className="h-8 w-8 mx-auto mb-2" />
+            <span className="text-sm font-medium">{article.category}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function FeedPage() {
   const queryClient = useQueryClient();
   
@@ -431,18 +564,13 @@ export default function FeedPage() {
                   className="theme-article-card-bg theme-article-card-border theme-article-card-hover border-2 shadow-card hover:shadow-card-hover transition-all duration-200 cursor-pointer group overflow-hidden h-full"
                   onClick={() => handleTopicResearch(article.title, article.slug)}
                 >
-                    {/* Article Image with Overlay */}
+                    {/* Enhanced Article Image with Smart Loading */}
                     <div className="relative overflow-hidden">
-                      <img 
-                        src={article.heroImageUrl}
-                        alt={article.title}
+                      <SmartArticleImage 
+                        article={article}
                         className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-200"
-                        loading="lazy"
-                        onError={(e) => {
-                          // Fallback image if original fails to load
-                          e.currentTarget.src = "https://images.pexels.com/photos/518543/pexels-photo-518543.jpeg";
-                        }}
                       />
+                      
                       {/* Semitransparent mask */}
                       <div className="absolute inset-0 bg-black bg-opacity-40"></div>
                       

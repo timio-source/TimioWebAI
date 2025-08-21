@@ -453,7 +453,7 @@ def validate_and_fix_cached_articles():
 # --- Enhanced Image Extraction Tools with Brave API ---
 @tool
 def brave_image_search(query: str, count: int = 5) -> List[str]:
-    """Search for images using Brave Search API based on the query."""
+    """Enhanced Brave Search for images with improved quality filtering."""
     try:
         brave_api_key = os.getenv('BRAVE_API_KEY')
         if not brave_api_key:
@@ -470,14 +470,15 @@ def brave_image_search(query: str, count: int = 5) -> List[str]:
         
         params = {
             'q': query,
-            'count': min(count, 10),
+            'count': min(count * 2, 20),  # Get more results for better filtering
             'search_lang': 'en',
             'country': 'US',
             'safesearch': 'strict',
-            'size': 'large'
+            'size': 'large',
+            'freshness': 'pw'  # Past week for recent images
         }
         
-        logger.info(f"Searching Brave for images: {query}")
+        logger.info(f"Enhanced Brave search for images: {query}")
         response = requests.get(url, headers=headers, params=params, timeout=10)
         response.raise_for_status()
         
@@ -485,19 +486,32 @@ def brave_image_search(query: str, count: int = 5) -> List[str]:
         images = []
         
         if 'results' in data:
-            for result in data['results'][:count]:
-                if 'src' in result:
+            for result in data['results']:
+                if 'src' in result and len(images) < count:
                     image_url = result.get('src', '')
-                    if image_url and image_url.startswith('http'):
-                        # Filter for quality
-                        if not any(skip in image_url.lower() for skip in ['thumbnail', 'avatar', 'icon', 'logo']):
+                    title = result.get('title', '').lower()
+                    
+                    # Enhanced quality filtering
+                    if (image_url and 
+                        image_url.startswith('http') and
+                        is_high_quality_image_url(image_url, query)):
+                        
+                        # Additional title relevance check
+                        query_keywords = extract_meaningful_keywords_from_query(query)
+                        title_relevance = any(keyword in title for keyword in query_keywords)
+                        
+                        # Basic quality checks
+                        quality_indicators = ['800', '1200', 'large', 'high']
+                        has_quality_indicator = any(indicator in image_url.lower() for indicator in quality_indicators)
+                        
+                        if title_relevance or has_quality_indicator or len(images) < 2:  # Ensure we get at least 2 images
                             images.append(image_url)
         
-        logger.info(f"Brave returned {len(images)} images for query: {query}")
+        logger.info(f"Enhanced Brave returned {len(images)} quality images for query: {query}")
         return images
         
     except Exception as e:
-        logger.warning(f"Brave image search failed for '{query}': {e}")
+        logger.warning(f"Enhanced Brave image search failed for '{query}': {e}")
         return []
 
 @tool
@@ -634,16 +648,201 @@ def extract_article_images(url: str) -> List[str]:
     
     return images[:3]  # Return up to 3 images
 
+def create_enhanced_search_terms_for_images(query: str) -> list:
+    """Creates multiple enhanced search terms for better image results."""
+    # Extract meaningful keywords from query
+    keywords = extract_meaningful_keywords_from_query(query)
+    
+    # Category-specific enhancement terms
+    category_enhancements = {
+        "politics": ["government", "politics", "congress", "election", "policy", "capitol"],
+        "technology": ["technology", "innovation", "digital", "computer", "ai", "tech"],
+        "business": ["business", "finance", "economy", "market", "corporate", "trade"],
+        "health": ["health", "medical", "hospital", "research", "healthcare", "medicine"],
+        "environment": ["environment", "nature", "climate", "green", "sustainability"],
+        "international": ["world", "global", "international", "diplomacy", "foreign"],
+        "education": ["education", "school", "university", "research", "academic"],
+        "science": ["science", "research", "laboratory", "discovery", "innovation"]
+    }
+    
+    # Determine category from query
+    detected_category = None
+    for category, terms in category_enhancements.items():
+        if any(term in query.lower() for term in terms):
+            detected_category = category
+            break
+    
+    search_terms = []
+    
+    # Primary: Extracted keywords + category terms
+    if keywords and detected_category:
+        category_terms = category_enhancements[detected_category]
+        search_terms.append(f"{' '.join(keywords[:2])} {category_terms[0]}")
+        search_terms.append(f"{category_terms[0]} {' '.join(keywords[:1])}")
+    
+    # Secondary: Just extracted keywords
+    if keywords:
+        search_terms.append(' '.join(keywords[:3]))
+    
+    # Tertiary: Category-specific search
+    if detected_category:
+        category_terms = category_enhancements[detected_category]
+        search_terms.append(f"{category_terms[0]} {category_terms[1]}")
+    
+    # Quaternary: Original query with news context
+    search_terms.append(f"{query} news")
+    search_terms.append(query)
+    
+    return search_terms
+
+def extract_meaningful_keywords_from_query(query: str) -> list:
+    """Extracts meaningful keywords from query, excluding stop words."""
+    import re
+    
+    stop_words = {
+        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
+        'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did',
+        'will', 'would', 'should', 'could', 'can', 'may', 'might', 'this', 'that', 'these', 'those',
+        'who', 'what', 'where', 'when', 'why', 'how', 'which', 'whose'
+    }
+    
+    # Extract words that are likely to be meaningful for image search
+    words = re.findall(r'\w+', query.lower())
+    keywords = [
+        word for word in words 
+        if len(word) > 3 and word not in stop_words
+    ]
+    
+    return keywords[:4]  # Return top 4 meaningful keywords
+
+def is_high_quality_image_url(img_url: str, query: str) -> bool:
+    """Determines if an image URL indicates high quality and relevance."""
+    if not img_url or not img_url.startswith('http'):
+        return False
+    
+    # URL quality checks
+    low_quality_indicators = [
+        'thumbnail', 'thumb', 'avatar', 'icon', 'logo', 'badge', 'button',
+        'banner', 'ad', 'advertisement', 'profile', 'small', 'tiny'
+    ]
+    
+    # Check for low quality indicators in URL
+    url_lower = img_url.lower()
+    if any(indicator in url_lower for indicator in low_quality_indicators):
+        return False
+    
+    # Require proper image extensions
+    if not any(ext in url_lower for ext in ['.jpg', '.jpeg', '.png', '.webp']):
+        # Allow if no extension is specified (could be a dynamic URL)
+        if '.' in url_lower and not any(ext in url_lower for ext in ['.html', '.php', '.asp']):
+            return False
+    
+    # Prefer larger image size indicators
+    size_indicators = ['800', '1200', '1600', 'large', 'big', 'full', 'high']
+    has_good_size = any(size in url_lower for size in size_indicators)
+    
+    # Check for query relevance in URL
+    query_words = extract_meaningful_keywords_from_query(query)
+    url_relevance = any(word in url_lower for word in query_words)
+    
+    return has_good_size or url_relevance or len(url_lower) > 50  # Basic URL length check
+
+def get_enhanced_unsplash_image_for_query(query: str) -> str:
+    """Gets enhanced Unsplash images with dynamic search terms."""
+    # Extract keywords for dynamic search
+    keywords = extract_meaningful_keywords_from_query(query)
+    
+    # Category-specific Unsplash searches
+    category_searches = {
+        "politics": ["government", "politics", "capitol", "democracy"],
+        "technology": ["technology", "innovation", "digital", "future"],
+        "business": ["business", "finance", "corporate", "economy"],
+        "health": ["medical", "healthcare", "research", "science"],
+        "environment": ["nature", "environment", "climate", "sustainability"],
+        "international": ["world", "global", "international", "earth"],
+        "education": ["education", "university", "research", "academic"],
+        "science": ["science", "research", "laboratory", "innovation"]
+    }
+    
+    # Determine category from query
+    detected_category = None
+    for category, terms in category_searches.items():
+        if any(term in query.lower() for term in terms):
+            detected_category = category
+            break
+    
+    # Try dynamic search first with title keywords
+    if keywords:
+        if detected_category:
+            category_terms = category_searches[detected_category]
+            primary_search = "+".join(keywords[:2] + category_terms[:1])
+        else:
+            primary_search = "+".join(keywords[:3])
+        return f"https://source.unsplash.com/1200x800/?{primary_search}"
+    
+    # Fallback to category-specific search
+    if detected_category:
+        fallback_search = "+".join(category_searches[detected_category][:2])
+        return f"https://source.unsplash.com/1200x800/?{fallback_search}"
+    
+    # Final fallback
+    return f"https://source.unsplash.com/1200x800/?{query.replace(' ', '+')}"
+
+
+def get_category_fallback_image(query: str) -> str:
+    """Returns high-quality, category-appropriate fallback images based on query analysis."""
+    fallback_images = {
+        "politics": "https://images.unsplash.com/photo-1529107386315-e1a2ed48a620?w=1200&h=800&fit=crop&auto=format&q=80",
+        "technology": "https://images.unsplash.com/photo-1518709268805-4e9042af2176?w=1200&h=800&fit=crop&auto=format&q=80",
+        "business": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=1200&h=800&fit=crop&auto=format&q=80",
+        "health": "https://images.unsplash.com/photo-1576091160399-112ba8d25d1f?w=1200&h=800&fit=crop&auto=format&q=80",
+        "environment": "https://images.unsplash.com/photo-1569163139394-de4e4f43e4e5?w=1200&h=800&fit=crop&auto=format&q=80",
+        "international": "https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?w=1200&h=800&fit=crop&auto=format&q=80",
+        "education": "https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=1200&h=800&fit=crop&auto=format&q=80",
+        "science": "https://images.unsplash.com/photo-1567427017947-545c5f8d16ad?w=1200&h=800&fit=crop&auto=format&q=80",
+        "general": "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=1200&h=800&fit=crop&auto=format&q=80"
+    }
+    
+    # Determine category from query
+    query_lower = query.lower()
+    
+    category_keywords = {
+        "politics": ["government", "politics", "congress", "election", "policy", "trump", "biden", "president"],
+        "technology": ["technology", "ai", "artificial intelligence", "tech", "innovation", "digital", "software"],
+        "business": ["business", "economy", "market", "finance", "corporate", "trade", "economic"],
+        "health": ["health", "medical", "healthcare", "hospital", "medicine", "covid", "vaccine"],
+        "environment": ["environment", "climate", "green", "sustainability", "carbon", "renewable"],
+        "international": ["international", "global", "world", "foreign", "diplomacy", "war", "conflict"],
+        "education": ["education", "school", "university", "academic", "research", "study"],
+        "science": ["science", "research", "discovery", "innovation", "laboratory", "scientific"]
+    }
+    
+    # Find the best matching category
+    for category, keywords in category_keywords.items():
+        if any(keyword in query_lower for keyword in keywords):
+            return fallback_images[category]
+    
+    # Default fallback
+    return fallback_images["general"]
+
 @tool
 def generate_contextual_image(query: str, sources: List[str] = None) -> str:
-    """Generate contextual images using Brave Search with improved fallback hierarchy."""
+    """Generate contextual images using enhanced multi-strategy search with improved fallback hierarchy."""
     
-    # Strategy 1: Try Brave image search first
-    logger.info(f"Trying Brave image search for: {query}")
-    brave_images = brave_image_search(query, count=3)
-    if brave_images:
-        logger.info(f"Using Brave image for query: {query}")
-        return brave_images[0]
+    # Strategy 1: Enhanced Brave image search with multiple query attempts
+    logger.info(f"Trying enhanced Brave image search for: {query}")
+    
+    # Create enhanced search terms
+    search_terms = create_enhanced_search_terms_for_images(query)
+    
+    for search_query in search_terms:
+        brave_images = brave_image_search(search_query, count=5)
+        if brave_images:
+            # Filter for high-quality images
+            for img_url in brave_images:
+                if is_high_quality_image_url(img_url, query):
+                    logger.info(f"Using enhanced Brave image for query: {search_query}")
+                    return img_url
     
     # Strategy 2: If we have sources, try to extract images from them
     if sources:
@@ -651,55 +850,35 @@ def generate_contextual_image(query: str, sources: List[str] = None) -> str:
             try:
                 extracted_images = extract_article_images(source_url)
                 if extracted_images:
-                    logger.info(f"Using extracted image from source: {source_url}")
-                    return extracted_images[0]
+                    # Validate extracted image quality
+                    for img_url in extracted_images:
+                        if is_high_quality_image_url(img_url, query):
+                            logger.info(f"Using validated extracted image from source: {source_url}")
+                            return img_url
             except Exception as e:
                 logger.warning(f"Failed to extract image from {source_url}: {e}")
                 continue
     
-    # Strategy 3: Try category-specific Brave search
-    category_queries = {
-        "politics": f"{query} government politics news",
-        "technology": f"{query} tech innovation AI",
-        "business": f"{query} business economy finance", 
-        "health": f"{query} medical health healthcare",
-        "international": f"{query} world global news",
-        "environment": f"{query} climate environment"
-    }
-    
-    for category, enhanced_query in category_queries.items():
-        if category.lower() in query.lower():
-            enhanced_images = brave_image_search.invoke({"query": enhanced_query, "count": 1})
-            if enhanced_images:
-                logger.info(f"Using enhanced Brave search for category {category}")
-                return enhanced_images[0]
+    # Strategy 3: Enhanced Unsplash with dynamic search terms
+    logger.info(f"Trying enhanced Unsplash search for: {query}")
+    enhanced_unsplash_url = get_enhanced_unsplash_image_for_query(query)
+    if enhanced_unsplash_url:
+        logger.info(f"Using enhanced Unsplash image")
+        return enhanced_unsplash_url
     
     # Strategy 4: Try DuckDuckGo as fallback
     logger.info(f"Trying DuckDuckGo image search for: {query}")
-    duckduckgo_images = duckduckgo_image_search.invoke({"query": query, "count": 1})
+    duckduckgo_images = duckduckgo_image_search(query, count=3)
     if duckduckgo_images:
-        logger.info(f"Using DuckDuckGo image for query: {query}")
-        return duckduckgo_images[0]
+        for img_url in duckduckgo_images:
+            if is_high_quality_image_url(img_url, query):
+                logger.info(f"Using DuckDuckGo image for query: {query}")
+                return img_url
     
-    # Final fallback: Category-appropriate fallback images
-    fallback_images = {
-        "politics": "https://images.unsplash.com/photo-1529107386315-e1a2ed48a620?w=800",
-        "technology": "https://images.unsplash.com/photo-1518709268805-4e9042af2176?w=800", 
-        "business": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=800",
-        "health": "https://images.unsplash.com/photo-1576091160399-112ba8d25d1f?w=800",
-        "environment": "https://images.unsplash.com/photo-1569163139394-de4e4f43e4e5?w=800",
-        "international": "https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?w=800",
-        "general": "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800"
-    }
-    
-    # Determine category from query
-    for category in fallback_images.keys():
-        if category in query.lower():
-            logger.info(f"Using fallback image for category: {category}")
-            return fallback_images[category]
-    
-    logger.info(f"Using general fallback image for query: {query}")
-    return fallback_images["general"]
+    # Final fallback: High-quality category-appropriate images
+    fallback_image = get_category_fallback_image(query)
+    logger.info(f"Using high-quality fallback image for query: {query}")
+    return fallback_image
 
 tavily_tool = TavilySearch()
 tools = [tavily_tool, scrape_website, extract_article_images, brave_image_search, duckduckgo_image_search, unsplash_image_search, generate_contextual_image]
