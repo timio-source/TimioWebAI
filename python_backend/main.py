@@ -24,10 +24,34 @@ from dotenv import load_dotenv
 import requests
 from bs4 import BeautifulSoup
 from langchain_core.tools import tool
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, quote
 from openai import RateLimitError
 
 from schemas import ResearchReport
+
+# Define scrape_website tool
+@tool
+def scrape_website(url: str) -> str:
+    """Scrape the main textual content from a website URL."""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        }
+        response = requests.get(url, timeout=10, headers=headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
+        # Extract main content from common tags
+        main_content = ''
+        for tag in ['article', '.main-content', '.content', '.post-content', 'body']:
+            section = soup.select_one(tag)
+            if section:
+                main_content = section.get_text(separator='\n', strip=True)
+                break
+        if not main_content:
+            main_content = soup.get_text(separator='\n', strip=True)
+        return main_content[:5000]  # Limit to 5000 chars
+    except Exception as e:
+        return f"Error scraping website: {e}"
 
 load_dotenv()
 
@@ -426,14 +450,176 @@ def validate_and_fix_cached_articles():
     logger.info(f"Cache validation complete: {fixed_count}/{total_articles} articles fixed")
     return fixed_count
 
-# --- Image Extraction Tools ---
+# --- Enhanced Image Extraction Tools with Brave API ---
+@tool
+def brave_image_search(query: str, count: int = 5) -> List[str]:
+    """Search for images using Brave Search API based on the query."""
+    try:
+        brave_api_key = os.getenv('BRAVE_API_KEY')
+        if not brave_api_key:
+            logger.warning("BRAVE_API_KEY not found, skipping Brave image search")
+            return []
+        
+        # Encode the query for URL
+        encoded_query = quote(query)
+        
+        # Brave Image Search API endpoint
+        url = f"https://api.search.brave.com/res/v1/images/search"
+        
+        headers = {
+            'Accept': 'application/json',
+            'Accept-Encoding': 'gzip',
+            'X-Subscription-Token': brave_api_key
+        }
+        
+        params = {
+            'q': query,
+            'count': min(count, 10),  # Limit to 10 max
+            'search_lang': 'en',
+            'country': 'US',
+            'safesearch': 'moderate',
+            'freshness': 'pd',  # Past day for fresh content
+            'size': 'large'  # Prefer larger images
+        }
+        
+        logger.info(f"Searching Brave for images: {query}")
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        images = []
+        
+        if 'results' in data:
+            for result in data['results'][:count]:
+                if 'src' in result:
+                    # Prefer the original image URL
+                    image_url = result.get('src', '')
+                    if image_url and image_url.startswith('http'):
+                        images.append(image_url)
+        
+        logger.info(f"Brave returned {len(images)} images for query: {query}")
+        return images
+        
+    except Exception as e:
+        logger.warning(f"Brave image search failed for '{query}': {e}")
+        return []
+
+@tool
+def duckduckgo_image_search(query: str, count: int = 5) -> List[str]:
+    """Search for images using DuckDuckGo as a fallback option."""
+    try:
+        # DuckDuckGo instant answer API for images
+        url = "https://duckduckgo.com/"
+        
+        # First, get the vqd token
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        }
+        
+        params = {
+            'q': query,
+            'iax': 'images',
+            'ia': 'images'
+        }
+        
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        
+        # Extract vqd token from response
+        vqd_match = re.search(r'vqd=([\d-]+)', response.text)
+        if not vqd_match:
+            logger.warning("Could not extract vqd token from DuckDuckGo")
+            return []
+        
+        vqd = vqd_match.group(1)
+        
+        # Now search for images
+        image_url = "https://duckduckgo.com/i.js"
+        image_params = {
+            'l': 'us-en',
+            'o': 'json',
+            'q': query,
+            'vqd': vqd,
+            'f': ',,,,,',
+            'p': '1'
+        }
+        
+        image_response = requests.get(image_url, headers=headers, params=image_params, timeout=10)
+        image_response.raise_for_status()
+        
+        data = image_response.json()
+        images = []
+        
+        if 'results' in data:
+            for result in data['results'][:count]:
+                if 'image' in result:
+                    image_url = result['image']
+                    if image_url and image_url.startswith('http'):
+                        images.append(image_url)
+        
+        logger.info(f"DuckDuckGo returned {len(images)} images for query: {query}")
+        return images
+        
+    except Exception as e:
+        logger.warning(f"DuckDuckGo image search failed for '{query}': {e}")
+        return []
+
+@tool
+def unsplash_image_search(query: str, count: int = 5) -> List[str]:
+    """Search for images using Unsplash API as another fallback."""
+    try:
+        unsplash_access_key = os.getenv('UNSPLASH_ACCESS_KEY')
+        if not unsplash_access_key:
+            logger.warning("UNSPLASH_ACCESS_KEY not found, using source.unsplash.com")
+            # Fallback to source.unsplash.com for random images
+            base_url = f"https://source.unsplash.com/800x600/"
+            query_terms = query.replace(' ', ',')
+            return [f"{base_url}?{query_terms}&{i}" for i in range(count)]
+        
+        url = "https://api.unsplash.com/search/photos"
+        
+        headers = {
+            'Authorization': f'Client-ID {unsplash_access_key}',
+            'Accept-Version': 'v1'
+        }
+        
+        params = {
+            'query': query,
+            'per_page': min(count, 10),
+            'orientation': 'landscape',
+            'order_by': 'relevant'
+        }
+        
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        images = []
+        
+        if 'results' in data:
+            for result in data['results'][:count]:
+                if 'urls' in result:
+                    # Use regular size image
+                    image_url = result['urls'].get('regular', result['urls'].get('small', ''))
+                    if image_url:
+                        images.append(image_url)
+        
+        logger.info(f"Unsplash returned {len(images)} images for query: {query}")
+        return images
+        
+    except Exception as e:
+        logger.warning(f"Unsplash image search failed for '{query}': {e}")
+        # Final fallback to source.unsplash.com
+        base_url = f"https://source.unsplash.com/800x600/"
+        query_terms = query.replace(' ', ',')
+        return [f"{base_url}?{query_terms}&{i}" for i in range(count)]
+
 @tool
 def extract_article_images(url: str) -> List[str]:
     """Extract images from article URLs using multiple strategies."""
     images = []
     
     try:
-        # Strategy 1: Try to extract images directly from the article
+        # Add headers to avoid being blocked
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         }
@@ -487,34 +673,86 @@ def extract_article_images(url: str) -> List[str]:
     except Exception as e:
         logger.warning(f"Failed to extract images from {url}: {e}")
     
-    # Strategy 2: Use Microlink as fallback
-    if not images:
-        microlink_url = f"https://api.microlink.io/?url={url}&meta=false&embed=image.url"
-        images.append(microlink_url)
-    
     return images[:3]  # Return up to 3 images
 
 @tool
 def generate_contextual_image(query: str, sources: List[str] = None) -> str:
-    """Generate contextual images using Microlink or article extraction."""
+    """Generate contextual images with improved fallback hierarchy."""
     
-    # If we have sources, try to extract images from them first
+    # Strategy 1: Try Brave image search first
+    logger.info(f"Trying Brave image search for: {query}")
+    brave_images = brave_image_search(query, count=1)
+    if brave_images:
+        logger.info(f"Using Brave image for query: {query}")
+        return brave_images[0]
+    
+    # Strategy 2: If we have sources, try to extract images from them
     if sources:
         for source_url in sources[:3]:  # Check first 3 sources
             try:
                 extracted_images = extract_article_images(source_url)
                 if extracted_images:
+                    logger.info(f"Using extracted image from source: {source_url}")
                     return extracted_images[0]
             except Exception as e:
                 logger.warning(f"Failed to extract image from {source_url}: {e}")
                 continue
     
-    # Fallback: Use a news image search service or placeholder
-    # You could integrate with Unsplash API (free) with news-related terms
-    fallback_url = f"https://source.unsplash.com/800x600/?news,{query.replace(' ', ',')}"
-    return fallback_url
+    # Strategy 3: Try DuckDuckGo image search
+    logger.info(f"Trying DuckDuckGo image search for: {query}")
+    duckduckgo_images = duckduckgo_image_search(query, count=1)
+    if duckduckgo_images:
+        logger.info(f"Using DuckDuckGo image for query: {query}")
+        return duckduckgo_images[0]
+    
+    # Strategy 4: Try Unsplash search
+    logger.info(f"Trying Unsplash image search for: {query}")
+    unsplash_images = unsplash_image_search(query, count=1)
+    if unsplash_images:
+        logger.info(f"Using Unsplash image for query: {query}")
+        return unsplash_images[0]
+    
+    # Final fallback: Generic news-related Unsplash image
+    logger.info(f"Using final fallback image for query: {query}")
+    fallback_terms = "news,breaking,journalism,media"
+    return f"https://source.unsplash.com/800x600/?{fallback_terms}"
 
-# --- Research Prompt Template ---
+tavily_tool = TavilySearch()
+tools = [tavily_tool, scrape_website, extract_article_images, brave_image_search, duckduckgo_image_search, unsplash_image_search, generate_contextual_image]
+
+# 2. Agent State
+class AgentState(TypedDict):
+    messages: Annotated[list, lambda x, y: x + y]
+    query: str
+    scraped_data: list
+    research_report: Optional[dict]
+    image_urls: Optional[dict]
+
+# 3. Agent and Graph Definition with optimized LLM
+llm = ChatOpenAI(
+    model="gpt-4o-mini",  # Use mini model for better rate limits
+    temperature=0,
+    max_tokens=1500,      # Limit tokens
+    request_timeout=30
+)
+
+def create_agent(llm, tools, system_prompt):
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", system_prompt),
+            MessagesPlaceholder(variable_name="messages"),
+        ]
+    )
+    return prompt | llm.bind_tools(tools)
+
+def agent_node(state, agent, name):
+    result = agent.invoke(state)
+    return {"messages": [result]}
+
+# --- Research Agent ---
+def create_research_prompt(query: str) -> str:
+    return RESEARCH_PROMPT_TEMPLATE.replace("[QUERY]", query)
+
 RESEARCH_PROMPT_TEMPLATE = """You are a real-time, non-partisan research assistant with live web browsing capability. You NEVER fabricate data, quotes, articles, or URLs. 
 
 CRITICAL FOCUS REQUIREMENT: You are researching EXACTLY "[QUERY]" - nothing else. You must stay strictly on topic and not deviate from this specific query. If you cannot find relevant information for the exact query, you must state "No relevant information found for [QUERY]" rather than researching related topics.
@@ -593,209 +831,7 @@ FINAL VALIDATION: Before submitting your response, review each section and ensur
 
 REMINDER: Stay focused on "[QUERY]" - do not research related topics or broader subjects unless they are directly relevant to "[QUERY]". If you cannot find enough information specifically about "[QUERY]", it is better to have a shorter, focused report than to include irrelevant information."""
 
-# --- Examples for Structured Output ---
-example_for_article = {
-    "title": "Research Report on [QUERY]",
-    "excerpt": "Comprehensive analysis based on real-time web research and primary sources.",
-    "content": "This report provides a detailed analysis based on live web research and primary source verification.",
-    "hero_image_url": "https://images.pexels.com/photos/12345/research-image.jpg"
-}
-
-example_for_executive_summary = {
-    "points": [
-        "Key finding 1 based on primary sources",
-        "Key finding 2 with direct citation",
-        "Key finding 3 from official documents"
-    ]
-}
-
-example_for_timeline_items = [
-    {
-        "date": "2024-01-01T00:00:00Z",
-        "title": "Event Title",
-        "description": "Description with direct quote from source",
-        "type": "Event Type",
-        "source_label": "Official Source Name",
-        "source_url": "https://official-source.gov/document"
-    }
-]
-
-example_for_cited_sources = [
-    {
-        "name": "Official Government Agency",
-        "type": "Primary Source",
-        "description": "Direct source of information",
-        "url": "https://official-source.gov"
-    }
-]
-
-example_for_raw_facts = [
-    {
-        "category": "Primary Source: [Source Name]",
-        "facts": [
-            "Direct quote from source",
-            "Literal statement from official document"
-        ]
-    }
-]
-
-example_for_perspectives = [
-    {
-        "viewpoint": "Perspective Headline",
-        "description": "Summary of this perspective",
-        "source": "Publisher Name",
-        "quote": "Exact quote from article",
-        "color": "blue",
-        "url": "https://publisher.com/article",
-        "reasoning": "Why this perspective matters",
-        "evidence": "Supporting evidence",
-        "conflict_source": "Opposing Source",
-        "conflict_quote": "Exact conflicting quote",
-        "conflict_url": "https://opposing-source.com/article"
-    }
-]
-
-example_for_conflicting_info = [
-    {
-        "conflict_id": "conflict_001",
-        "conflict_type": "factual_dispute",
-        "conflict_description": "Description of the specific conflict or contradiction",
-        "source_a": {
-            "name": "First Source Name",
-            "quote": "Exact quote from first source",
-            "url": "https://first-source.com/article",
-            "claim": "What this source claims"
-        },
-        "source_b": {
-            "name": "Opposing Source Name", 
-            "quote": "Exact conflicting quote from opposing source",
-            "url": "https://opposing-source.com/article",
-            "claim": "What the opposing source claims"
-        },
-        "resolution_status": "unresolved",
-        "severity": "high"
-    }
-]
-
-examples_map = {
-    "article": example_for_article,
-    "executive_summary": example_for_executive_summary,
-    "timeline_items": example_for_timeline_items,
-    "cited_sources": example_for_cited_sources,
-    "raw_facts": example_for_raw_facts,
-    "perspectives": example_for_perspectives,
-    "conflicting_info": example_for_conflicting_info
-}
-
-# Define a reducer function for merging dictionaries
-def merge_reports(dict1: dict, dict2: dict) -> dict:
-    return {**dict1, **dict2}
-
-# 1. Tool Setup
-tavily_tool = TavilySearch(max_results=15)
-
-@tool
-def scrape_website(url: str) -> str:
-    """Scrapes the content of a website with enhanced extraction for quotes and key content."""
-    try:
-        # Add headers to avoid being blocked
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-        }
-        
-        response = requests.get(url, timeout=15, headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, "lxml")
-        
-        # Remove script and style elements
-        for script in soup(["script", "style", "nav", "footer", "header"]):
-            script.decompose()
-        
-        # Extract main content areas
-        content_parts = []
-        
-        # Try to find main content areas
-        main_selectors = [
-            'main', 'article', '.content', '.post-content', '.entry-content',
-            '.article-content', '.story-content', '.main-content', '#content',
-            '.body', '.text', '.copy'
-        ]
-        
-        for selector in main_selectors:
-            elements = soup.select(selector)
-            if elements:
-                for element in elements:
-                    text = element.get_text(separator="\n", strip=True)
-                    if len(text) > 100:  # Only include substantial content
-                        content_parts.append(text)
-        
-        # If no main content found, get all text
-        if not content_parts:
-            text = soup.get_text(separator="\n", strip=True)
-            content_parts.append(text)
-        
-        # Combine and clean content
-        combined_content = "\n\n".join(content_parts)
-        
-        # Clean up extra whitespace and normalize
-        import re
-        combined_content = re.sub(r'\n\s*\n', '\n\n', combined_content)  # Remove excessive newlines
-        combined_content = re.sub(r'\s+', ' ', combined_content)  # Normalize whitespace
-        
-        # Limit content size but preserve important parts
-        if len(combined_content) > 4000:
-            # Try to keep the beginning and end (often most important)
-            first_part = combined_content[:2500]
-            last_part = combined_content[-1500:]
-            combined_content = f"{first_part}\n\n...\n\n{last_part}"
-        
-        return combined_content
-        
-    except requests.RequestException as e:
-        return f"Error scraping website: {e}"
-    except Exception as e:
-        return f"Error processing website content: {e}"
-
-tools = [tavily_tool, scrape_website, extract_article_images, generate_contextual_image]
-
-# 2. Agent State
-class AgentState(TypedDict):
-    messages: Annotated[list, lambda x, y: x + y]
-    query: str
-    scraped_data: list
-    research_report: Annotated[Optional[dict], merge_reports]
-    image_urls: Optional[dict]
-
-# 3. Agent and Graph Definition with optimized LLM
-llm = ChatOpenAI(
-    model="gpt-4o-mini",  # Use mini model for better rate limits
-    temperature=0,
-    max_tokens=1500,      # Limit tokens
-    request_timeout=30
-)
-
-def create_agent(llm, tools, system_prompt):
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", system_prompt),
-            MessagesPlaceholder(variable_name="messages"),
-        ]
-    )
-    return prompt | llm.bind_tools(tools)
-
-def agent_node(state, agent, name):
-    result = agent.invoke(state)
-    return {"messages": [result]}
-
-# --- Research Agent ---
-def create_research_prompt(query: str) -> str:
-    return RESEARCH_PROMPT_TEMPLATE.replace("[QUERY]", query)
-
+tavily_tool = TavilySearch()
 research_agent = create_agent(llm, [tavily_tool], create_research_prompt("placeholder"))
 
 def research_node(state: AgentState):
@@ -902,54 +938,141 @@ def scraper_node(state: AgentState):
     logger.info("SCRAPING COMPLETE")
     return {"scraped_data": scraped_content, "messages": []}
 
-# --- Image Fetcher Agent ---
-IMAGE_FETCHER_PROMPT = """You are an expert at extracting contextual images from news articles and sources.
-Your goal is to find the most relevant images from the actual articles being researched.
-Focus on extracting featured images, article thumbnails, and contextually relevant visuals."""
+# --- Enhanced Image Fetcher Agent ---
+IMAGE_FETCHER_PROMPT = """You are an expert at finding contextually relevant images from news articles and search results.
+Your goal is to find the most appropriate images that match the research topic and enhance the article presentation.
+Focus on finding high-quality, relevant images that support the content being researched."""
 
-image_fetcher_agent = create_agent(llm, [extract_article_images, generate_contextual_image], IMAGE_FETCHER_PROMPT)
+image_fetcher_agent = create_agent(llm, [extract_article_images, brave_image_search, duckduckgo_image_search, unsplash_image_search, generate_contextual_image], IMAGE_FETCHER_PROMPT)
 
 def image_fetcher_node(state: AgentState):
-    logger.info("FETCHING CONTEXTUAL IMAGES")
+    logger.info("FETCHING CONTEXTUAL IMAGES WITH ENHANCED SEARCH")
     
-    # Get hero image from the first relevant source
-    hero_image_url = "https://source.unsplash.com/800x600/?news"  # fallback
-    source_images = []
-    
-    # Extract URLs from scraped data
+    # Extract query and source URLs
+    query = state.get('query', '')
     source_urls = [item.get('url') for item in state.get('scraped_data', []) if item.get('url')]
     
-    if source_urls:
-        # Try to get hero image from the most relevant source
-        hero_images = extract_article_images(source_urls[0])
-        if hero_images:
-            hero_image_url = hero_images[0]
-        else:
-            # Use contextual generation based on query
-            hero_image_url = generate_contextual_image(state['query'], source_urls[:1])
+    # Get hero image with improved search strategy
+    hero_image_url = generate_contextual_image(query, source_urls)
     
     # Get images for cited sources
+    source_images = []
     research_report = state.get('research_report', {})
+    
     if 'cited_sources' in research_report:
         for i, source in enumerate(research_report['cited_sources']):
+            source_image = None
+            
+            # Try to get image from specific source URL first
             if i < len(source_urls):
-                # Try to extract image from the specific source URL
                 source_url = source_urls[i]
                 source_img_list = extract_article_images(source_url)
                 if source_img_list:
-                    source_images.append(source_img_list[0])
+                    source_image = source_img_list[0]
+            
+            # If no image from source, try contextual search
+            if not source_image:
+                source_name = source.get('name', query)
+                contextual_images = brave_image_search(f"{query} {source_name}", count=1)
+                if contextual_images:
+                    source_image = contextual_images[0]
                 else:
-                    # Fallback to Microlink screenshot
-                    microlink_url = f"https://api.microlink.io/?url={source_url}&meta=false&embed=image.url"
-                    source_images.append(microlink_url)
-            else:
-                # Generic source placeholder
-                source_images.append("https://via.placeholder.com/400x300?text=Source+Image")
+                    # Final fallback for sources
+                    source_image = f"https://source.unsplash.com/400x300/?news,source&{i}"
+            
+            source_images.append(source_image)
     
-    logger.info("CONTEXTUAL IMAGES FETCHED")
+    logger.info(f"CONTEXTUAL IMAGES FETCHED - Hero: {hero_image_url}, Sources: {len(source_images)}")
     return {"image_urls": {"hero_image": hero_image_url, "source_images": source_images}}
 
 # --- Writer Agents ---
+# Example data for each report section
+example_for_article = {
+    "title": "Sample Article Title",
+    "slug": "sample-article-title",
+    "id": 123456,
+    "read_time": 5,
+    "source_count": 3,
+    "published_at": "2024-01-01T00:00:00Z",
+    "category": "Research",
+    "author_name": "AI Agent",
+    "author_title": "Research Specialist",
+    "hero_image_url": "https://example.com/image.jpg"
+}
+example_for_executive_summary = {
+    "article_id": 123456,
+    "points": [
+        "Key finding 1 about the query",
+        "Key finding 2 about the query",
+        "Key finding 3 about the query"
+    ]
+}
+example_for_timeline_items = [
+    {
+        "article_id": 123456,
+        "date": "2024-01-01T00:00:00Z",
+        "title": "Event Title",
+        "description": "Description of the event",
+        "type": "event_type",
+        "source_label": "Source Name"
+    }
+]
+example_for_cited_sources = [
+    {
+        "article_id": 123456,
+        "name": "Source Name",
+        "type": "web_search",
+        "description": "Description of the source",
+        "url": "https://example.com/source",
+        "image_url": "https://example.com/source-image.jpg"
+    }
+]
+example_for_raw_facts = [
+    {
+        "article_id": 123456,
+        "category": "research",
+        "facts": [
+            "Fact 1 about the query",
+            "Fact 2 about the query"
+        ]
+    }
+]
+example_for_perspectives = [
+    {
+        "article_id": 123456,
+        "viewpoint": "Perspective Title",
+        "description": "Description of the perspective",
+        "source": "Source Name",
+        "color": "blue"
+    }
+]
+example_for_conflicting_info = [
+    {
+        "article_id": 123456,
+        "conflict": "Description of the conflict",
+        "source_a": {
+            "name": "Source A",
+            "quote": "Conflicting quote from Source A",
+            "url": "https://example.com/source-a"
+        },
+        "source_b": {
+            "name": "Source B",
+            "quote": "Conflicting quote from Source B",
+            "url": "https://example.com/source-b"
+        }
+    }
+]
+
+examples_map = {
+    "article": example_for_article,
+    "executive_summary": example_for_executive_summary,
+    "timeline_items": example_for_timeline_items,
+    "cited_sources": example_for_cited_sources,
+    "raw_facts": example_for_raw_facts,
+    "perspectives": example_for_perspectives,
+    "conflicting_info": example_for_conflicting_info
+}
+
 def create_writer_agent(section_name: str):
     example = examples_map.get(section_name)
     if not example:
