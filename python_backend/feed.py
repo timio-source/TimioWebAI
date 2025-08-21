@@ -18,8 +18,13 @@ import requests
 from bs4 import BeautifulSoup
 from langchain_core.tools import tool
 from urllib.parse import urljoin, urlparse
+import time
+import random
 
 load_dotenv()
+
+# Global variable for cache coordination with main.py
+last_server_refresh = None
 
 # Define a reducer function for merging dictionaries
 def merge_reports(dict1: dict, dict2: dict) -> dict:
@@ -77,32 +82,63 @@ def get_trending_news() -> List[Dict[str, Any]]:
         return []
 
 @tool
-def extract_news_image(url: str) -> str:
-    """Extract images from news article URLs using multiple strategies."""
+def extract_robust_news_image(url: str) -> str:
+    """Extract images from news article URLs with enhanced robustness."""
     if not url or not url.startswith('http'):
         return None
     
     try:
-        # Strategy 1: Try to extract images directly from the article
+        # Add random delay to avoid rate limiting
+        time.sleep(random.uniform(1, 3))
+        
+        # Rotate User-Agent strings to avoid blocks
+        user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        ]
+        
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': random.choice(user_agents),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Cache-Control': 'max-age=0',
         }
         
-        response = requests.get(url, timeout=10, headers=headers)
+        response = requests.get(url, timeout=8, headers=headers, allow_redirects=True)
+        
+        # Handle different response codes gracefully
+        if response.status_code == 403:
+            print(f"Access forbidden for {url}, using fallback")
+            return None
+        elif response.status_code == 404:
+            print(f"URL not found {url}, using fallback")
+            return None
+        elif response.status_code != 200:
+            print(f"HTTP {response.status_code} for {url}, using fallback")
+            return None
+            
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Look for common news article image selectors
+        # Enhanced image selectors for better extraction
         image_selectors = [
             'meta[property="og:image"]',
             'meta[name="twitter:image"]',
             'meta[name="twitter:image:src"]',
-            '.article-image img',
+            'meta[property="article:image"]',
             '.hero-image img',
             '.featured-image img',
-            'article img',
+            '.article-image img',
             '.lead-image img',
-            '.story-image img'
+            '.story-image img',
+            'article img[src*="cdn"]',
+            'article img[src*="static"]',
+            '.content img[src*="cdn"]',
+            '.main-content img'
         ]
         
         for selector in image_selectors:
@@ -110,12 +146,12 @@ def extract_news_image(url: str) -> str:
                 meta_tag = soup.select_one(selector)
                 if meta_tag and meta_tag.get('content'):
                     img_url = meta_tag.get('content')
-                    if img_url.startswith('http'):
+                    if img_url and img_url.startswith('http') and not any(x in img_url.lower() for x in ['icon', 'logo', 'avatar', 'favicon']):
                         return img_url
             else:
                 img_tags = soup.select(selector)
-                for img in img_tags:
-                    src = img.get('src') or img.get('data-src')
+                for img in img_tags[:3]:  # Check first 3 images only
+                    src = img.get('src') or img.get('data-src') or img.get('data-lazy-src')
                     if src:
                         # Convert relative URLs to absolute
                         if src.startswith('//'):
@@ -125,43 +161,42 @@ def extract_news_image(url: str) -> str:
                         elif not src.startswith('http'):
                             src = urljoin(url, src)
                         
-                        # Filter out small/icon images
-                        if not any(x in src.lower() for x in ['icon', 'logo', 'avatar', 'pixel.gif', 'tracking']):
+                        # Enhanced filtering
+                        if (src.startswith('http') and 
+                            not any(x in src.lower() for x in ['icon', 'logo', 'avatar', 'pixel.gif', 'tracking', 'analytics', 'favicon', '1x1']) and
+                            any(x in src.lower() for x in ['.jpg', '.jpeg', '.png', '.webp'])):
                             return src
                     
+    except requests.RequestException as e:
+        print(f"Request failed for {url}: {e}")
     except Exception as e:
-        print(f"Failed to extract images from {url}: {e}")
+        print(f"Error extracting images from {url}: {e}")
     
-    # Strategy 2: Use Microlink as fallback
-    try:
-        microlink_url = f"https://api.microlink.io/?url={url}&meta=false&embed=image.url"
-        return microlink_url
-    except Exception as e:
-        print(f"Microlink fallback failed for {url}: {e}")
-    
-    # Final fallback
     return None
 
 @tool
-def generate_contextual_news_image(category: str, headline: str) -> str:
-    """Generate contextual images for news topics."""
+def generate_enhanced_contextual_image(category: str, headline: str) -> str:
+    """Generate enhanced contextual images for news topics with better category mapping."""
     
-    # Category-based image mapping for news topics
+    # More specific category-based image mapping
     category_images = {
-        "politics": "https://source.unsplash.com/800x600/?government,politics,capitol",
-        "technology": "https://source.unsplash.com/800x600/?technology,computer,innovation",
-        "business": "https://source.unsplash.com/800x600/?business,finance,market",
-        "health": "https://source.unsplash.com/800x600/?medical,health,hospital",
-        "environment": "https://source.unsplash.com/800x600/?environment,nature,climate",
-        "international": "https://source.unsplash.com/800x600/?world,global,international",
-        "education": "https://source.unsplash.com/800x600/?education,university,research",
-        "general": "https://source.unsplash.com/800x600/?news,newspaper,media"
+        "politics": "https://source.unsplash.com/1200x800/?government,politics,capitol,voting",
+        "technology": "https://source.unsplash.com/1200x800/?technology,ai,computer,innovation,digital",
+        "business": "https://source.unsplash.com/1200x800/?business,finance,market,economy,office",
+        "health": "https://source.unsplash.com/1200x800/?medical,health,hospital,research,science",
+        "environment": "https://source.unsplash.com/1200x800/?environment,nature,climate,renewable,green",
+        "international": "https://source.unsplash.com/1200x800/?world,global,international,diplomacy,flags",
+        "education": "https://source.unsplash.com/1200x800/?education,university,research,books,learning",
+        "general": "https://source.unsplash.com/1200x800/?news,newspaper,media,journalism"
     }
     
     category_key = category.lower()
     
-    # Return category-specific image or general news image
-    return category_images.get(category_key, category_images["general"])
+    # Try category-specific first, then general
+    if category_key in category_images:
+        return category_images[category_key]
+    else:
+        return category_images["general"]
 
 def is_newsworthy(event: Dict[str, Any]) -> bool:
     """Determines if an event is newsworthy and important."""
@@ -271,21 +306,6 @@ FORMAT:
 
 Generate exactly 6-8 important news topics from the provided events."""
 
-# Event Filter Agent
-EVENT_FILTER_PROMPT = """You are a news filter focused on important, impactful stories.
-EXCLUDE: Celebrity news, entertainment, sports, gossip
-INCLUDE: Politics, technology, economy, health, international affairs, environment, education"""
-
-# Category Classifier Agent  
-CATEGORY_PROMPT = """Classify important news into these categories:
-- Politics (government, elections, policy)
-- Technology (AI, innovation, cybersecurity)
-- Business (economy, markets, finance)
-- Health (medical research, policy, pandemics)
-- Environment (climate, sustainability)
-- International (global affairs, conflicts, diplomacy)
-- Education (academic research, policy)"""
-
 # Agent Creation Functions
 def create_hot_topic_agent(llm, tools):
     prompt = ChatPromptTemplate.from_messages([
@@ -294,38 +314,24 @@ def create_hot_topic_agent(llm, tools):
     ])
     return prompt | llm
 
-def create_event_filter_agent(llm, tools):
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", EVENT_FILTER_PROMPT),
-        MessagesPlaceholder(variable_name="messages"),
-    ])
-    return prompt | llm.bind_tools(tools)
-
-def create_category_agent(llm, tools):
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", CATEGORY_PROMPT),
-        MessagesPlaceholder(variable_name="messages"),
-    ])
-    return prompt | llm.bind_tools(tools)
-
 # Node Functions
 def trending_news_node(state: HotTopicState):
     """Fetches trending news from various sources."""
-    print("--- 📰 FETCHING IMPORTANT NEWS ---")
+    print("--- FETCHING IMPORTANT NEWS ---")
     events = get_trending_news.invoke({})
-    print(f"--- 📰 FETCHED {len(events)} TOTAL NEWS ARTICLES ---")
+    print(f"--- FETCHED {len(events)} TOTAL NEWS ARTICLES ---")
     return {"trending_events": events, "messages": []}
 
 def event_filter_node(state: HotTopicState):
     """Filters events for importance and relevance."""
-    print("--- 🔍 FILTERING FOR IMPORTANT NEWS ---")
+    print("--- FILTERING FOR IMPORTANT NEWS ---")
     filtered_events = filter_relevant_events.invoke({"events": state['trending_events']})
-    print(f"--- 🔍 FILTERED TO {len(filtered_events)} IMPORTANT ARTICLES ---")
+    print(f"--- FILTERED TO {len(filtered_events)} IMPORTANT ARTICLES ---")
     return {"trending_events": filtered_events, "messages": []}
 
 def hot_topic_generator_node(state: HotTopicState):
     """Generates hot topic headlines and descriptions."""
-    print("--- ✍️ GENERATING IMPORTANT HOT TOPICS ---")
+    print("--- GENERATING IMPORTANT HOT TOPICS ---")
     
     # Create agent
     llm = ChatOpenAI(model="gpt-4o", temperature=0.7)
@@ -373,11 +379,11 @@ def hot_topic_generator_node(state: HotTopicState):
         else:
             topics_data = hot_topics
             
-        print(f"--- ✅ GENERATED {len(topics_data.get('topics', []))} HOT TOPICS ---")
+        print(f"--- GENERATED {len(topics_data.get('topics', []))} HOT TOPICS ---")
         return {"hot_topics": topics_data, "messages": [result]}
     except (json.JSONDecodeError, AttributeError) as e:
         error_message = f"Error parsing hot topics: {e}"
-        print(f"--- ❌ ERROR PARSING HOT TOPICS: {error_message} ---")
+        print(f"--- ERROR PARSING HOT TOPICS: {error_message} ---")
         # Return a fallback structure with important news
         fallback_topics = {
             "topics": [
@@ -398,8 +404,8 @@ def hot_topic_generator_node(state: HotTopicState):
         return {"hot_topics": fallback_topics, "messages": [result]}
 
 def image_fetcher_node(state: HotTopicState):
-    """Fetches contextual images for hot topics using the new implementation."""
-    print("--- 🖼️ FETCHING CONTEXTUAL IMAGES ---")
+    """Fetches contextual images for hot topics with enhanced robustness."""
+    print("--- FETCHING CONTEXTUAL IMAGES ---")
     
     image_urls = {}
     
@@ -409,46 +415,62 @@ def image_fetcher_node(state: HotTopicState):
             headline = topic.get('headline', '')
             source_url = topic.get('source_url', '')
             
+            image_found = False
+            
             # Strategy 1: Try to extract image from the source URL
             if source_url and source_url.startswith('http'):
                 try:
-                    extracted_image = extract_news_image.invoke({"url": source_url})
+                    extracted_image = extract_robust_news_image.invoke({"url": source_url})
                     if extracted_image and extracted_image.startswith('http'):
                         image_urls[f"topic_{i}"] = extracted_image
-                        print(f"--- ✅ EXTRACTED IMAGE FOR TOPIC {i} FROM SOURCE ---")
-                        continue
+                        print(f"--- EXTRACTED IMAGE FOR TOPIC {i} FROM SOURCE ---")
+                        image_found = True
                 except Exception as e:
-                    print(f"--- ⚠️ ERROR EXTRACTING IMAGE FOR TOPIC {i}: {e} ---")
+                    print(f"--- ERROR EXTRACTING IMAGE FOR TOPIC {i}: {e} ---")
             
-            # Strategy 2: Generate contextual image based on category
-            try:
-                contextual_image = generate_contextual_news_image.invoke({
-                    "category": category,
-                    "headline": headline
-                })
-                image_urls[f"topic_{i}"] = contextual_image
-                print(f"--- ✅ GENERATED CONTEXTUAL IMAGE FOR TOPIC {i} ---")
-            except Exception as e:
-                print(f"--- ⚠️ ERROR GENERATING CONTEXTUAL IMAGE FOR TOPIC {i}: {e} ---")
-                # Final fallback
-                image_urls[f"topic_{i}"] = "https://source.unsplash.com/800x600/?news,newspaper"
+            # Strategy 2: Use Microlink as fallback
+            if not image_found and source_url and source_url.startswith('http'):
+                try:
+                    microlink_url = f"https://api.microlink.io/?url={source_url}&meta=false&embed=image.url"
+                    # Test the microlink URL
+                    response = requests.head(microlink_url, timeout=5)
+                    if response.status_code == 200:
+                        image_urls[f"topic_{i}"] = microlink_url
+                        print(f"--- USED MICROLINK IMAGE FOR TOPIC {i} ---")
+                        image_found = True
+                except Exception as e:
+                    print(f"--- MICROLINK FAILED FOR TOPIC {i}: {e} ---")
+            
+            # Strategy 3: Generate contextual image based on category
+            if not image_found:
+                try:
+                    contextual_image = generate_enhanced_contextual_image.invoke({
+                        "category": category,
+                        "headline": headline
+                    })
+                    image_urls[f"topic_{i}"] = contextual_image
+                    print(f"--- GENERATED CONTEXTUAL IMAGE FOR TOPIC {i} ---")
+                except Exception as e:
+                    print(f"--- ERROR GENERATING CONTEXTUAL IMAGE FOR TOPIC {i}: {e} ---")
+                    # Final fallback
+                    image_urls[f"topic_{i}"] = "https://source.unsplash.com/1200x800/?news,newspaper"
     
-    print(f"--- 🖼️ TOTAL IMAGES FETCHED: {len(image_urls)} ---")
+    print(f"--- TOTAL IMAGES FETCHED: {len(image_urls)} ---")
     return {"image_urls": image_urls, "messages": []}
 
 def aggregator_node(state: HotTopicState):
     """Combines all data into final hot topics."""
-    print("--- 📊 AGGREGATING HOT TOPICS ---")
+    print("--- AGGREGATING HOT TOPICS ---")
     
     final_topics = []
     if state.get('hot_topics') and 'topics' in state['hot_topics']:
         for i, topic in enumerate(state['hot_topics']['topics']):
-            # Get image URL with fallback
+            # Get image URL with enhanced fallback
             image_url = state.get('image_urls', {}).get(f"topic_{i}")
             if not image_url:
                 # Final fallback based on category
                 category = topic.get('category', 'General').lower()
-                image_url = generate_contextual_news_image.invoke({
+                image_url = generate_enhanced_contextual_image.invoke({
                     "category": category,
                     "headline": topic.get('headline', '')
                 })
@@ -461,13 +483,13 @@ def aggregator_node(state: HotTopicState):
             }
             final_topics.append(topic_with_image)
     
-    print(f"--- 📊 FINAL AGGREGATED TOPICS: {len(final_topics)} ---")
+    print(f"--- FINAL AGGREGATED TOPICS: {len(final_topics)} ---")
     return {"hot_topics": {"topics": final_topics}, "messages": []}
 
 # Graph Construction
 def create_hot_topics_workflow():
     """Creates and returns the hot topics workflow graph."""
-    llm = ChatOpenAI(model="gpt-4o", temperature=0.3)  # Lower temperature for more focused results
+    llm = ChatOpenAI(model="gpt-4o", temperature=0.3)
     
     workflow = StateGraph(HotTopicState)
     
@@ -489,24 +511,24 @@ def create_hot_topics_workflow():
 # Hot Topics Manager
 class HotTopicsManager:
     def __init__(self):
-        print("--- 🚀 INITIALIZING HOT TOPICS MANAGER ---")
+        print("--- INITIALIZING HOT TOPICS MANAGER ---")
         try:
             self.workflow = create_hot_topics_workflow()
             self.cache = {}
             self.last_generated = None
-            print("--- ✅ HOT TOPICS MANAGER INITIALIZED ---")
+            print("--- HOT TOPICS MANAGER INITIALIZED ---")
         except Exception as e:
-            print(f"--- ❌ ERROR INITIALIZING MANAGER: {e} ---")
+            print(f"--- ERROR INITIALIZING MANAGER: {e} ---")
             self.workflow = None
             self.cache = {}
             self.last_generated = None
     
     def generate_daily_topics(self):
         """Runs the workflow to generate important hot topics."""
-        print("--- 🚀 GENERATING IMPORTANT DAILY HOT TOPICS ---")
+        print("--- GENERATING IMPORTANT DAILY HOT TOPICS ---")
         
         if not self.workflow:
-            print("--- ❌ WORKFLOW NOT INITIALIZED ---")
+            print("--- WORKFLOW NOT INITIALIZED ---")
             return {"topics": []}
         
         try:
@@ -524,17 +546,17 @@ class HotTopicsManager:
             self.last_generated = datetime.now()
             
             topics_count = len(self.cache.get('topics', []))
-            print(f"--- ✅ GENERATED {topics_count} IMPORTANT HOT TOPICS ---")
+            print(f"--- GENERATED {topics_count} IMPORTANT HOT TOPICS ---")
             return self.cache
         except Exception as e:
-            print(f"--- ❌ ERROR GENERATING TOPICS: {e} ---")
+            print(f"--- ERROR GENERATING TOPICS: {e} ---")
             return {"topics": []}
     
     def get_cached_topics(self):
         """Returns cached hot topics or generates new ones."""
         # Force generation if cache is empty or old
         if (self.last_generated is None or 
-            datetime.now() - self.last_generated > timedelta(hours=6) or  # Generate more frequently
+            datetime.now() - self.last_generated > timedelta(hours=4) or  # More frequent generation
             not self.cache or
             len(self.cache.get('topics', [])) == 0):
             return self.generate_daily_topics()
@@ -542,14 +564,14 @@ class HotTopicsManager:
         return self.cache
 
 # Initialize the manager
-print("--- 🚀 STARTING HOT TOPICS INITIALIZATION ---")
+print("--- STARTING HOT TOPICS INITIALIZATION ---")
 hot_topics_manager = HotTopicsManager()
 
 # FastAPI Application
 app = FastAPI(
     title="Important News Hot Topics API",
-    description="AI-powered important news topics generator focusing on politics, technology, business, health, and international affairs",
-    version="2.0.0"
+    description="AI-powered important news topics generator with enhanced image extraction",
+    version="2.1.0"
 )
 
 # CORS Configuration
@@ -575,11 +597,11 @@ def read_root():
     """Health check endpoint."""
     return {
         "message": "Important News Hot Topics API is running",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "focus": "Important news only - no celebrity, sports, or entertainment",
-        "image_strategy": "Contextual extraction from news sources with Microlink fallback"
+        "image_strategy": "Enhanced contextual extraction with robust fallbacks"
     }
 
 @app.get("/health")
@@ -592,13 +614,40 @@ def health_check():
         "last_generated": hot_topics_manager.last_generated.isoformat() if hot_topics_manager.last_generated else None,
         "topics_count": len(hot_topics_manager.cache.get('topics', [])),
         "workflow_status": "initialized" if hot_topics_manager.workflow else "failed",
-        "image_strategy": "News source extraction + Microlink + Unsplash fallback"
+        "image_strategy": "News source extraction + Microlink + Enhanced Unsplash fallback"
     }
 
 @app.get("/api/feed")
 def get_feed():
     """Returns important hot topics as a list of articles for the frontend."""
-    print("--- 📢 /API/FEED ENDPOINT HIT ---")
+    global last_server_refresh
+    
+    print("--- /API/FEED ENDPOINT HIT ---")
+    
+    # Check if it's time for universal refresh
+    current_time = datetime.now()
+    current_hour = current_time.hour
+    current_minute = current_time.minute
+    
+    # Set refresh time (e.g., 2:00 AM every day)
+    REFRESH_HOUR = 2
+    REFRESH_MINUTE = 0
+    
+    # Check if it's refresh time
+    should_refresh = False
+    if (current_hour == REFRESH_HOUR and 
+        current_minute < 5 and  # 5-minute window
+        (last_server_refresh is None or 
+         current_time.date() > last_server_refresh.date())):
+        
+        should_refresh = True
+        last_server_refresh = current_time
+        print(f"Server refresh triggered at {current_time}")
+        
+        # Clear the cache to force fresh data
+        hot_topics_manager.cache = {}
+        hot_topics_manager.last_generated = None
+        print("Cache cleared for fresh generation")
     
     try:
         topics_data = hot_topics_manager.get_cached_topics()
@@ -606,27 +655,43 @@ def get_feed():
         articles = []
         
         for topic in topics:
+            # Create slug from headline
+            slug = re.sub(r'[^a-zA-Z0-9\s-]', '', topic.get("headline", "")).lower().replace(" ", "-").replace("--", "-").strip("-")
+            
             article = {
                 "id": topic.get("id", str(uuid.uuid4())),
                 "title": topic.get("headline", "Important News Update"),
-                "slug": topic.get("headline", "important-news").lower().replace(" ", "-").replace("/", "-").replace(":", "").replace("?", "").replace("!", ""),
+                "slug": slug,
                 "excerpt": topic.get("description", "Important news development."),
                 "category": topic.get("category", "General"),
                 "publishedAt": topic.get("generated_at", datetime.now().isoformat()),
                 "readTime": 3,
                 "sourceCount": 1,
-                "heroImageUrl": topic.get("image_url", "https://source.unsplash.com/800x600/?news,newspaper"),
+                "heroImageUrl": topic.get("image_url", "https://source.unsplash.com/1200x800/?news,newspaper"),
                 "authorName": "AI News Curator",
                 "authorTitle": "Important News Generator"
             }
             articles.append(article)
         
-        print(f"--- ✅ RETURNING {len(articles)} IMPORTANT NEWS ARTICLES ---")
+        print(f"--- RETURNING {len(articles)} IMPORTANT NEWS ARTICLES ---")
         return articles
         
     except Exception as e:
-        print(f"--- ❌ ERROR IN /API/FEED: {e} ---")
-        return []
+        print(f"--- ERROR IN /API/FEED: {e} ---")
+        # Return fallback articles
+        return [{
+            "id": str(uuid.uuid4()),
+            "title": "Breaking News Available",
+            "slug": "breaking-news-available",
+            "excerpt": "Important news stories are being processed.",
+            "category": "General",
+            "publishedAt": datetime.now().isoformat(),
+            "readTime": 2,
+            "sourceCount": 1,
+            "heroImageUrl": "https://source.unsplash.com/1200x800/?news,breaking",
+            "authorName": "AI News Curator",
+            "authorTitle": "News Generator"
+        }]
 
 @app.post("/api/research")
 def trigger_research_generic(request: dict):
@@ -649,7 +714,7 @@ def trigger_research_generic(request: dict):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"--- ❌ ERROR IN GENERIC RESEARCH: {e} ---")
+        print(f"--- ERROR IN GENERIC RESEARCH: {e} ---")
         raise HTTPException(status_code=500, detail="Research failed")
 
 @app.post("/api/hot-topic/{topic_id}/research")
@@ -680,26 +745,56 @@ def trigger_research(topic_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"--- ❌ ERROR IN RESEARCH TRIGGER: {e} ---")
+        print(f"--- ERROR IN RESEARCH TRIGGER: {e} ---")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.get("/api/article/{slug}")
 def get_article(slug: str):
     """Get a specific research article by slug."""
-    raise HTTPException(status_code=404, detail="Article endpoint not implemented yet")
+    # This endpoint should be handled by main.py
+    # Return a redirect or proxy request to main.py
+    raise HTTPException(status_code=404, detail="Article endpoint handled by main research service")
 
 @app.get("/api/server-time")
 def get_server_time():
     """Get current server time."""
+    global last_server_refresh
+    
+    current_time = datetime.now()
+    current_hour = current_time.hour
+    current_minute = current_time.minute
+    
+    # Set refresh time (e.g., 2:00 AM every day)
+    REFRESH_HOUR = 2
+    REFRESH_MINUTE = 0
+    
+    # Check if it's refresh time
+    should_refresh = False
+    if (current_hour == REFRESH_HOUR and 
+        current_minute < 5 and  # 5-minute window
+        (last_server_refresh is None or 
+         current_time.date() > last_server_refresh.date())):
+        
+        should_refresh = True
+        last_server_refresh = current_time
+        print(f"Server refresh triggered at {current_time}")
+        
+        # Clear the cache to force fresh data
+        hot_topics_manager.cache = {}
+        hot_topics_manager.last_generated = None
+    
     return {
-        "server_time": datetime.now().isoformat(),
-        "timezone": "UTC"
+        "timestamp": current_time.isoformat(),
+        "shouldRefresh": should_refresh,
+        "nextRefresh": f"{REFRESH_HOUR:02d}:{REFRESH_MINUTE:02d}",
+        "currentHour": current_hour,
+        "currentMinute": current_minute
     }
 
 @app.post("/api/generate-topics")
 def generate_topics():
     """Manually trigger topic generation."""
-    print("--- 📢 MANUAL TOPIC GENERATION REQUESTED ---")
+    print("--- MANUAL TOPIC GENERATION REQUESTED ---")
     try:
         topics = hot_topics_manager.generate_daily_topics()
         return {
@@ -709,7 +804,7 @@ def generate_topics():
             "topics": topics
         }
     except Exception as e:
-        print(f"--- ❌ ERROR GENERATING TOPICS: {e} ---")
+        print(f"--- ERROR GENERATING TOPICS: {e} ---")
         return {
             "error": str(e), 
             "topics_count": 0,
@@ -719,7 +814,7 @@ def generate_topics():
 @app.post("/api/force-generate-topics")
 def force_generate_topics():
     """Force generate new topics (bypass cache)."""
-    print("--- 📢 FORCE TOPIC GENERATION REQUESTED ---")
+    print("--- FORCE TOPIC GENERATION REQUESTED ---")
     try:
         hot_topics_manager.cache = {}
         hot_topics_manager.last_generated = None
@@ -732,7 +827,7 @@ def force_generate_topics():
             "generated_at": datetime.now().isoformat()
         }
     except Exception as e:
-        print(f"--- ❌ ERROR FORCE GENERATING TOPICS: {e} ---")
+        print(f"--- ERROR FORCE GENERATING TOPICS: {e} ---")
         return {
             "error": str(e), 
             "topics_count": 0,
@@ -749,7 +844,7 @@ def debug_topics():
         "cache_content": hot_topics_manager.cache,
         "manager_status": "initialized" if hot_topics_manager.workflow else "failed",
         "workflow_exists": hot_topics_manager.workflow is not None,
-        "image_strategy": "News source extraction + Microlink + Unsplash fallback"
+        "image_strategy": "Enhanced news source extraction + Microlink + Unsplash fallback"
     }
 
 @app.get("/api/topics-info")
@@ -759,14 +854,14 @@ def get_topics_info():
         "cache_status": "active" if hot_topics_manager.cache else "empty",
         "topics_count": len(hot_topics_manager.cache.get('topics', [])),
         "last_generated": hot_topics_manager.last_generated.isoformat() if hot_topics_manager.last_generated else None,
-        "next_generation": (hot_topics_manager.last_generated + timedelta(hours=6)).isoformat() if hot_topics_manager.last_generated else None,
+        "next_generation": (hot_topics_manager.last_generated + timedelta(hours=4)).isoformat() if hot_topics_manager.last_generated else None,
         "focus": "Important news: Politics, Technology, Business, Health, International, Environment, Education",
-        "image_strategy": "Contextual extraction from actual news sources"
+        "image_strategy": "Enhanced contextual extraction from actual news sources with robust fallbacks"
     }
 
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 Starting Important News Hot Topics API Server...")
+    print("🚀 Starting Enhanced Important News Hot Topics API Server...")
     print("📊 Available endpoints:")
     print("  GET  /                    - Health check")
     print("  GET  /health             - Detailed health check")
@@ -776,7 +871,9 @@ if __name__ == "__main__":
     print("  GET  /api/debug/topics   - Debug topics status")
     print("  GET  /api/topics-info    - Get topics cache info")
     print("  POST /api/research       - Trigger research")
+    print("  GET  /api/server-time    - Get server time and refresh status")
     print("🎯 FOCUS: Important news only - Politics, Technology, Business, Health, International")
-    print("🖼️ IMAGES: Contextual extraction from news sources + Microlink + Unsplash fallback")
+    print("🖼️ IMAGES: Enhanced contextual extraction with robust fallbacks and rate limiting")
+    print("⚡ IMPROVEMENTS: Better error handling, global variable fix, enhanced image extraction")
     
     uvicorn.run(app, host="0.0.0.0", port=8000)
