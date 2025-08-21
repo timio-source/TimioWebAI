@@ -944,7 +944,8 @@ def image_fetcher_node(state: AgentState):
     source_urls = [item.get('url') for item in state.get('scraped_data', []) if item.get('url')]
     
     # Get hero image with improved search strategy
-    hero_image_url = generate_contextual_image(query, source_urls)
+    # CORRECT - use invoke method
+    hero_image_url = generate_contextual_image.invoke({"query": query, "sources": source_urls})
     
     # Get images for cited sources
     source_images = []

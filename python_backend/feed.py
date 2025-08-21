@@ -176,7 +176,7 @@ def search_relevant_images(topic_title: str, category: str) -> str:
         params = {
             "q": search_query,
             "count": 5,
-            "safesearch": "moderate",
+            "safesearch": "strict",
             "search_lang": "en",
             "country": "US",
             "size": "large"
