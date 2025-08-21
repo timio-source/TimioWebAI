@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 import requests
 from bs4 import BeautifulSoup
 from langchain_core.tools import tool
-from pexelsapi.pexels import Pexels
+from urllib.parse import urljoin, urlparse
 
 load_dotenv()
 
@@ -75,6 +75,93 @@ def get_trending_news() -> List[Dict[str, Any]]:
     except Exception as e:
         print(f"Error fetching trending news from Tavily: {e}")
         return []
+
+@tool
+def extract_news_image(url: str) -> str:
+    """Extract images from news article URLs using multiple strategies."""
+    if not url or not url.startswith('http'):
+        return None
+    
+    try:
+        # Strategy 1: Try to extract images directly from the article
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        }
+        
+        response = requests.get(url, timeout=10, headers=headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Look for common news article image selectors
+        image_selectors = [
+            'meta[property="og:image"]',
+            'meta[name="twitter:image"]',
+            'meta[name="twitter:image:src"]',
+            '.article-image img',
+            '.hero-image img',
+            '.featured-image img',
+            'article img',
+            '.lead-image img',
+            '.story-image img'
+        ]
+        
+        for selector in image_selectors:
+            if selector.startswith('meta'):
+                meta_tag = soup.select_one(selector)
+                if meta_tag and meta_tag.get('content'):
+                    img_url = meta_tag.get('content')
+                    if img_url.startswith('http'):
+                        return img_url
+            else:
+                img_tags = soup.select(selector)
+                for img in img_tags:
+                    src = img.get('src') or img.get('data-src')
+                    if src:
+                        # Convert relative URLs to absolute
+                        if src.startswith('//'):
+                            src = 'https:' + src
+                        elif src.startswith('/'):
+                            src = urljoin(url, src)
+                        elif not src.startswith('http'):
+                            src = urljoin(url, src)
+                        
+                        # Filter out small/icon images
+                        if not any(x in src.lower() for x in ['icon', 'logo', 'avatar', 'pixel.gif', 'tracking']):
+                            return src
+                    
+    except Exception as e:
+        print(f"Failed to extract images from {url}: {e}")
+    
+    # Strategy 2: Use Microlink as fallback
+    try:
+        microlink_url = f"https://api.microlink.io/?url={url}&meta=false&embed=image.url"
+        return microlink_url
+    except Exception as e:
+        print(f"Microlink fallback failed for {url}: {e}")
+    
+    # Final fallback
+    return None
+
+@tool
+def generate_contextual_news_image(category: str, headline: str) -> str:
+    """Generate contextual images for news topics."""
+    
+    # Category-based image mapping for news topics
+    category_images = {
+        "politics": "https://source.unsplash.com/800x600/?government,politics,capitol",
+        "technology": "https://source.unsplash.com/800x600/?technology,computer,innovation",
+        "business": "https://source.unsplash.com/800x600/?business,finance,market",
+        "health": "https://source.unsplash.com/800x600/?medical,health,hospital",
+        "environment": "https://source.unsplash.com/800x600/?environment,nature,climate",
+        "international": "https://source.unsplash.com/800x600/?world,global,international",
+        "education": "https://source.unsplash.com/800x600/?education,university,research",
+        "general": "https://source.unsplash.com/800x600/?news,newspaper,media"
+    }
+    
+    category_key = category.lower()
+    
+    # Return category-specific image or general news image
+    return category_images.get(category_key, category_images["general"])
 
 def is_newsworthy(event: Dict[str, Any]) -> bool:
     """Determines if an event is newsworthy and important."""
@@ -173,12 +260,12 @@ You MUST generate ONLY valid JSON output with NO commentary or explanations.
 FORMAT:
 ```json
 [
-  {{
+  {
     "headline": "Compelling, serious news headline",
     "description": "Two sentence description explaining the significance and impact.",
     "category": "Politics/Technology/Business/Health/Environment/International/Education/General",
     "source_url": "URL of the original news source"
-  }}
+  }
 ]
 ```
 
@@ -247,7 +334,7 @@ def hot_topic_generator_node(state: HotTopicState):
     
     # Prepare message with events
     events_text = "\n\n".join([
-        f"Title: {event['title']}\nSummary: {event['summary']}\nSource: {event['source']}"
+        f"Title: {event['title']}\nSummary: {event['summary']}\nSource: {event['source']}\nURL: {event.get('url', '')}"
         for event in state['trending_events']
     ])
     print(f"--- EVENTS BEING SENT TO AGENT: {len(state['trending_events'])} events ---")
@@ -311,38 +398,42 @@ def hot_topic_generator_node(state: HotTopicState):
         return {"hot_topics": fallback_topics, "messages": [result]}
 
 def image_fetcher_node(state: HotTopicState):
-    """Fetches images for hot topics."""
-    print("--- 🖼️ FETCHING IMAGES ---")
-    
-    PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
-    if PEXELS_API_KEY:
-        try:
-            pexels_api = Pexels(PEXELS_API_KEY)
-        except:
-            pexels_api = None
-    else:
-        pexels_api = None
+    """Fetches contextual images for hot topics using the new implementation."""
+    print("--- 🖼️ FETCHING CONTEXTUAL IMAGES ---")
     
     image_urls = {}
     
     if state.get('hot_topics') and 'topics' in state['hot_topics']:
         for i, topic in enumerate(state['hot_topics']['topics']):
-            category = topic.get('category', 'news').lower()
-            search_term = f"{category} news business"
+            category = topic.get('category', 'General')
+            headline = topic.get('headline', '')
+            source_url = topic.get('source_url', '')
             
-            if pexels_api:
+            # Strategy 1: Try to extract image from the source URL
+            if source_url and source_url.startswith('http'):
                 try:
-                    search_photos = pexels_api.search_photos(search_term, page=1, per_page=1)
-                    if search_photos.get('photos'):
-                        image_urls[f"topic_{i}"] = search_photos['photos'][0]['src']['original']
-                    else:
-                        image_urls[f"topic_{i}"] = "https://images.pexels.com/photos/518543/pexels-photo-518543.jpeg"
+                    extracted_image = extract_news_image.invoke({"url": source_url})
+                    if extracted_image and extracted_image.startswith('http'):
+                        image_urls[f"topic_{i}"] = extracted_image
+                        print(f"--- ✅ EXTRACTED IMAGE FOR TOPIC {i} FROM SOURCE ---")
+                        continue
                 except Exception as e:
-                    print(f"Error fetching image for topic {i}: {e}")
-                    image_urls[f"topic_{i}"] = "https://images.pexels.com/photos/518543/pexels-photo-518543.jpeg"
-            else:
-                image_urls[f"topic_{i}"] = "https://images.pexels.com/photos/518543/pexels-photo-518543.jpeg"
+                    print(f"--- ⚠️ ERROR EXTRACTING IMAGE FOR TOPIC {i}: {e} ---")
+            
+            # Strategy 2: Generate contextual image based on category
+            try:
+                contextual_image = generate_contextual_news_image.invoke({
+                    "category": category,
+                    "headline": headline
+                })
+                image_urls[f"topic_{i}"] = contextual_image
+                print(f"--- ✅ GENERATED CONTEXTUAL IMAGE FOR TOPIC {i} ---")
+            except Exception as e:
+                print(f"--- ⚠️ ERROR GENERATING CONTEXTUAL IMAGE FOR TOPIC {i}: {e} ---")
+                # Final fallback
+                image_urls[f"topic_{i}"] = "https://source.unsplash.com/800x600/?news,newspaper"
     
+    print(f"--- 🖼️ TOTAL IMAGES FETCHED: {len(image_urls)} ---")
     return {"image_urls": image_urls, "messages": []}
 
 def aggregator_node(state: HotTopicState):
@@ -352,10 +443,20 @@ def aggregator_node(state: HotTopicState):
     final_topics = []
     if state.get('hot_topics') and 'topics' in state['hot_topics']:
         for i, topic in enumerate(state['hot_topics']['topics']):
+            # Get image URL with fallback
+            image_url = state.get('image_urls', {}).get(f"topic_{i}")
+            if not image_url:
+                # Final fallback based on category
+                category = topic.get('category', 'General').lower()
+                image_url = generate_contextual_news_image.invoke({
+                    "category": category,
+                    "headline": topic.get('headline', '')
+                })
+            
             topic_with_image = {
                 **topic,
                 "id": str(uuid.uuid4()),
-                "image_url": state.get('image_urls', {}).get(f"topic_{i}", "https://images.pexels.com/photos/518543/pexels-photo-518543.jpeg"),
+                "image_url": image_url,
                 "generated_at": state.get('generated_at', datetime.now().isoformat())
             }
             final_topics.append(topic_with_image)
@@ -477,7 +578,8 @@ def read_root():
         "version": "2.0.0",
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "focus": "Important news only - no celebrity, sports, or entertainment"
+        "focus": "Important news only - no celebrity, sports, or entertainment",
+        "image_strategy": "Contextual extraction from news sources with Microlink fallback"
     }
 
 @app.get("/health")
@@ -489,7 +591,8 @@ def health_check():
         "cache_status": "active" if hot_topics_manager.cache else "empty",
         "last_generated": hot_topics_manager.last_generated.isoformat() if hot_topics_manager.last_generated else None,
         "topics_count": len(hot_topics_manager.cache.get('topics', [])),
-        "workflow_status": "initialized" if hot_topics_manager.workflow else "failed"
+        "workflow_status": "initialized" if hot_topics_manager.workflow else "failed",
+        "image_strategy": "News source extraction + Microlink + Unsplash fallback"
     }
 
 @app.get("/api/feed")
@@ -512,7 +615,7 @@ def get_feed():
                 "publishedAt": topic.get("generated_at", datetime.now().isoformat()),
                 "readTime": 3,
                 "sourceCount": 1,
-                "heroImageUrl": topic.get("image_url", "https://images.pexels.com/photos/518543/pexels-photo-518543.jpeg"),
+                "heroImageUrl": topic.get("image_url", "https://source.unsplash.com/800x600/?news,newspaper"),
                 "authorName": "AI News Curator",
                 "authorTitle": "Important News Generator"
             }
@@ -645,7 +748,8 @@ def debug_topics():
         "last_generated": hot_topics_manager.last_generated.isoformat() if hot_topics_manager.last_generated else None,
         "cache_content": hot_topics_manager.cache,
         "manager_status": "initialized" if hot_topics_manager.workflow else "failed",
-        "workflow_exists": hot_topics_manager.workflow is not None
+        "workflow_exists": hot_topics_manager.workflow is not None,
+        "image_strategy": "News source extraction + Microlink + Unsplash fallback"
     }
 
 @app.get("/api/topics-info")
@@ -656,7 +760,8 @@ def get_topics_info():
         "topics_count": len(hot_topics_manager.cache.get('topics', [])),
         "last_generated": hot_topics_manager.last_generated.isoformat() if hot_topics_manager.last_generated else None,
         "next_generation": (hot_topics_manager.last_generated + timedelta(hours=6)).isoformat() if hot_topics_manager.last_generated else None,
-        "focus": "Important news: Politics, Technology, Business, Health, International, Environment, Education"
+        "focus": "Important news: Politics, Technology, Business, Health, International, Environment, Education",
+        "image_strategy": "Contextual extraction from actual news sources"
     }
 
 if __name__ == "__main__":
@@ -672,5 +777,6 @@ if __name__ == "__main__":
     print("  GET  /api/topics-info    - Get topics cache info")
     print("  POST /api/research       - Trigger research")
     print("🎯 FOCUS: Important news only - Politics, Technology, Business, Health, International")
+    print("🖼️ IMAGES: Contextual extraction from news sources + Microlink + Unsplash fallback")
     
     uvicorn.run(app, host="0.0.0.0", port=8000)
