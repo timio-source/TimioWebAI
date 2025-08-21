@@ -1496,6 +1496,8 @@ async def get_article(slug: str):
 @app.get("/api/feed")
 def get_feed():
     """Returns hot topics as a list of articles for the frontend."""
+    global last_server_refresh  # Add this line at the top
+    
     logger.info("/API/FEED ENDPOINT HIT")
     
     # Check if it's time for universal refresh
