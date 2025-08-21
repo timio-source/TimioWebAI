@@ -39,6 +39,7 @@ export default function ArticlePage() {
   const [, setLocation] = useLocation();
   const [showThemeController, setShowThemeController] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isRedirectingToResearch, setIsRedirectingToResearch] = useState(false);
   const queryClient = useQueryClient();
 
   // Helper function to find URL for a source name
@@ -60,20 +61,22 @@ export default function ArticlePage() {
       return response.json();
     },
     onSuccess: (data) => {
-      // Navigate to research loading page
-      setLocation('/research-loading');
+      // Navigate to the generated research report
+      setLocation(`/article/${data.slug}`);
       toast({
-        title: "Research Started",
-        description: "Generating your comprehensive research report...",
+        title: "Research Report Generated",
+        description: "Your comprehensive research report is ready to view.",
       });
     },
     onError: (error) => {
       console.error("Research generation failed:", error);
       toast({
         title: "Research Failed",
-        description: "Unable to start research. Please try again.",
+        description: "Unable to generate research report. Please try again.",
         variant: "destructive",
       });
+      // Navigate back to feed on error
+      setLocation('/');
     }
   });
 
@@ -137,16 +140,59 @@ export default function ArticlePage() {
       
       // Otherwise use the actual slug
       const url = API_BASE_URL ? `${API_BASE_URL}/api/article/${slug}` : `/api/article/${slug}`;
-      return fetch(url).then(res => res.json());
+      const response = await fetch(url);
+      
+      // If article not found (404), trigger research generation
+      if (response.status === 404) {
+        console.log(`Article ${slug} not found in cache, triggering research generation`);
+        
+        // Get the search query from localStorage or use the slug as fallback
+        const query = localStorage.getItem('searchQuery') || slug.replace(/-/g, ' ');
+        
+        // Set the search query for the UI
+        setSearchQuery(query);
+        
+        // Set redirect flag
+        setIsRedirectingToResearch(true);
+        
+        // Navigate to research loading page and start research
+        setTimeout(() => {
+          setLocation('/research-loading');
+          // Trigger the research mutation
+          researchMutation.mutate(query);
+        }, 100);
+        
+        // Throw error to prevent further processing
+        throw new Error('REDIRECT_TO_RESEARCH');
+      }
+      
+      // If article is being generated (202)
+      if (response.status === 202) {
+        const data = await response.json();
+        throw new Error(`GENERATING: ${data.detail}`);
+      }
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      return response.json();
     },
-    enabled: !!slug,
+    enabled: !!slug && !isRedirectingToResearch,
     // Server-controlled caching - let server decide when to refresh
     staleTime: 0, // Always check with server
     gcTime: 24 * 60 * 60 * 1000, // Keep in cache for 24 hours
     refetchOnMount: true, // Always refetch on mount to check server
     refetchOnWindowFocus: false, // Don't refetch on window focus
     refetchOnReconnect: true, // Refetch on reconnect
-    retry: 2,
+    retry: (failureCount, error) => {
+      // Don't retry if we're redirecting to research
+      if (error.message === 'REDIRECT_TO_RESEARCH' || error.message.startsWith('GENERATING:')) {
+        return false;
+      }
+      // Retry other errors up to 2 times
+      return failureCount < 2;
+    },
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
   });
 
@@ -257,6 +303,28 @@ export default function ArticlePage() {
     }
   };
 
+  // Handle research redirect
+  if (isRedirectingToResearch || (error && error.message === 'REDIRECT_TO_RESEARCH')) {
+    return (
+      <div className="min-h-screen theme-page-bg">
+        <Header 
+          onThemeToggle={handleThemeToggle}
+          showRefresh={false}
+        />
+        
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex items-center justify-center min-h-[60vh]">
+            <div className="text-center space-y-4">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
+              <h3 className="text-lg font-medium text-gray-900">Starting research generation...</h3>
+              <p className="text-sm text-gray-600">Redirecting to research page</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   // Show dummy mode loading overlay
   if (dummyModeLoading) {
     return (
@@ -343,10 +411,12 @@ export default function ArticlePage() {
     );
   }
 
-  if (!articleData || !articleData.article) {
+  // Handle article being generated
+  if (error && error.message.startsWith('GENERATING:')) {
+    const generatingMessage = error.message.replace('GENERATING: ', '');
+    
     return (
       <div className="min-h-screen theme-page-bg">
-        {/* Header Component */}
         <Header 
           onThemeToggle={handleThemeToggle}
           showRefresh={false}
@@ -357,12 +427,21 @@ export default function ArticlePage() {
             <Card className="w-full max-w-md mx-4">
               <CardContent className="pt-6">
                 <div className="text-center">
-                  <h1 className="text-2xl font-bold text-gray-900 mb-2">Article Not Found</h1>
-                  <p className="text-gray-600 mb-4">The article you're looking for doesn't exist.</p>
-                  <Button onClick={() => setLocation('/')} variant="outline">
-                    <ArrowLeft className="h-4 w-4 mr-2" />
-                    Go Back to Feed
-                  </Button>
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+                  <h1 className="text-2xl font-bold text-gray-900 mb-2">Research in Progress</h1>
+                  <p className="text-gray-600 mb-4">{generatingMessage}</p>
+                  <div className="space-y-4">
+                    <Button 
+                      onClick={() => window.location.reload()}
+                      className="w-full"
+                    >
+                      Check Status
+                    </Button>
+                    <Button onClick={() => setLocation('/')} variant="outline" className="w-full">
+                      <ArrowLeft className="h-4 w-4 mr-2" />
+                      Go Back to Feed
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -371,6 +450,75 @@ export default function ArticlePage() {
         
         {/* Theme Controller */}
         {showThemeController && <ThemeController onClose={() => setShowThemeController(false)} />}
+      </div>
+    );
+  }
+
+  // Handle other errors or no article data
+  if (!articleData || !articleData.article) {
+    // Check if there's an error that needs special handling
+    if (error && error.message !== 'REDIRECT_TO_RESEARCH') {
+      return (
+        <div className="min-h-screen theme-page-bg">
+          <Header 
+            onThemeToggle={handleThemeToggle}
+            showRefresh={false}
+          />
+          
+          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <div className="flex items-center justify-center min-h-[60vh]">
+              <Card className="w-full max-w-md mx-4">
+                <CardContent className="pt-6">
+                  <div className="text-center">
+                    <h1 className="text-2xl font-bold text-gray-900 mb-2">Generate Research Report</h1>
+                    <p className="text-gray-600 mb-4">This article needs to be generated. Click below to start research.</p>
+                    <div className="space-y-4">
+                      <Button 
+                        onClick={() => {
+                          const query = searchQuery || slug.replace(/-/g, ' ');
+                          localStorage.setItem('searchQuery', query);
+                          setLocation('/research-loading');
+                          researchMutation.mutate(query);
+                        }}
+                        className="w-full"
+                        disabled={researchMutation.isPending}
+                      >
+                        {researchMutation.isPending ? 'Starting Research...' : 'Generate Research Report'}
+                      </Button>
+                      <Button onClick={() => setLocation('/')} variant="outline" className="w-full">
+                        <ArrowLeft className="h-4 w-4 mr-2" />
+                        Go Back to Feed
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </main>
+          
+          {/* Theme Controller */}
+          {showThemeController && <ThemeController onClose={() => setShowThemeController(false)} />}
+        </div>
+      );
+    }
+    
+    // For other cases, show loading
+    return (
+      <div className="min-h-screen theme-page-bg">
+        <Header 
+          onThemeToggle={handleThemeToggle}
+          showRefresh={false}
+        />
+        
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex items-center justify-center min-h-[60vh]">
+            <div className="text-center space-y-4">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
+              <h3 className="text-lg font-medium text-gray-900">Preparing research report...</h3>
+              <p className="text-sm text-gray-600">Setting up article generation</p>
+            </div>
+          </div>
+        </main>
       </div>
     );
   }

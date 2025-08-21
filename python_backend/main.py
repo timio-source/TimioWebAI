@@ -2095,6 +2095,31 @@ async def generate_article_for_topic_endpoint(request: dict):
         logger.error(f"ERROR IN MANUAL ARTICLE GENERATION: {e}")
         raise HTTPException(status_code=500, detail=f"Error generating article: {str(e)}")
 
+@app.get("/api/article/{slug}", response_model=ResearchReport)
+async def get_article(slug: str):
+    logger.info(f"FETCHING ARTICLE WITH SLUG: {slug}")
+    
+    report = report_cache.get(slug)
+    if not report:
+        logger.info(f"ARTICLE NOT FOUND IN CACHE: {slug}")
+        
+        # Check if it's in the generation queue
+        with article_generation_lock:
+            queued_headlines = [topic.get('headline', '') for topic in article_generation_queue]
+            is_queued = any(slug in headline.lower().replace(' ', '-') for headline in queued_headlines)
+        
+        if is_queued:
+            raise HTTPException(
+                status_code=202, 
+                detail="Article is being generated. Please try again in a few moments."
+            )
+        else:
+            # Return 404 so frontend can trigger research generation
+            raise HTTPException(status_code=404, detail="Article not found - research needed")
+    
+    logger.info("ARTICLE FOUND, RETURNING TO CLIENT")
+    return report
+
 @app.get("/api/rate-limit-status")
 async def get_rate_limit_status():
     """Get current rate limiting status."""
