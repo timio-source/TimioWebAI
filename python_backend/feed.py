@@ -17,7 +17,6 @@ from dotenv import load_dotenv
 import requests
 from bs4 import BeautifulSoup
 from langchain_core.tools import tool
-from pexelsapi.pexels import Pexels
 
 load_dotenv()
 
@@ -75,6 +74,96 @@ def get_trending_news() -> List[Dict[str, Any]]:
     except Exception as e:
         print(f"Error fetching trending news from Tavily: {e}")
         return []
+
+@tool
+def search_relevant_images(topic_title: str, category: str) -> str:
+    """Searches for relevant images using Brave Search API based on topic content."""
+    try:
+        # Get Brave Search API key from environment
+        brave_api_key = os.getenv("BRAVE_API_KEY")
+        if not brave_api_key:
+            print("Warning: BRAVE_API_KEY not found, using fallback image")
+            return get_fallback_image(category)
+        
+        # Create search query based on topic and category
+        search_terms = {
+            "Politics": f"{topic_title} government politics news",
+            "Technology": f"{topic_title} technology innovation tech",
+            "Business": f"{topic_title} business economy finance",
+            "Health": f"{topic_title} health medical healthcare",
+            "Environment": f"{topic_title} environment climate sustainability",
+            "International": f"{topic_title} international global world",
+            "Education": f"{topic_title} education research academic",
+            "General": f"{topic_title} news current events"
+        }
+        
+        search_query = search_terms.get(category, f"{topic_title} news")
+        
+        # Brave Search API endpoint for images
+        url = "https://api.search.brave.com/res/v1/images/search"
+        headers = {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "X-Subscription-Token": brave_api_key
+        }
+        
+        params = {
+            "q": search_query,
+            "count": 5,  # Get multiple results to have options
+            "safesearch": "moderate",
+            "search_lang": "en",
+            "country": "US"
+        }
+        
+        print(f"Searching images for: {search_query}")
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            images = data.get("results", [])
+            
+            if images:
+                # Filter for high-quality images
+                for image in images:
+                    img_url = image.get("src", "")
+                    # Basic quality filters
+                    if (img_url and 
+                        not any(skip in img_url.lower() for skip in ['thumbnail', 'avatar', 'icon', 'logo']) and
+                        any(ext in img_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp'])):
+                        print(f"Found relevant image: {img_url}")
+                        return img_url
+                
+                # If no filtered image found, use first result
+                if images[0].get("src"):
+                    return images[0]["src"]
+        
+        else:
+            print(f"Brave Search API error: {response.status_code} - {response.text}")
+        
+        # Fallback if no images found
+        return get_fallback_image(category)
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Network error searching for images: {e}")
+        return get_fallback_image(category)
+    except Exception as e:
+        print(f"Error searching for images: {e}")
+        return get_fallback_image(category)
+
+def get_fallback_image(category: str) -> str:
+    """Returns category-appropriate fallback images when search fails."""
+    fallback_images = {
+        "Politics": "https://images.unsplash.com/photo-1529107386315-e1a2ed48a620?w=800",  # Government building
+        "Technology": "https://images.unsplash.com/photo-1518709268805-4e9042af2176?w=800",  # Tech/AI
+        "Business": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=800",  # Business/Finance
+        "Health": "https://images.unsplash.com/photo-1576091160399-112ba8d25d1f?w=800",  # Healthcare
+        "Environment": "https://images.unsplash.com/photo-1569163139394-de4e4f43e4e5?w=800",  # Environment
+        "International": "https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?w=800",  # Global/World
+        "Education": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=800",  # Education/Research
+        "General": "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800"  # News/General
+    }
+    
+    return fallback_images.get(category, fallback_images["General"])
 
 def is_newsworthy(event: Dict[str, Any]) -> bool:
     """Determines if an event is newsworthy and important."""
@@ -173,12 +262,12 @@ You MUST generate ONLY valid JSON output with NO commentary or explanations.
 FORMAT:
 ```json
 [
-  {{
+  {
     "headline": "Compelling, serious news headline",
     "description": "Two sentence description explaining the significance and impact.",
     "category": "Politics/Technology/Business/Health/Environment/International/Education/General",
     "source_url": "URL of the original news source"
-  }}
+  }
 ]
 ```
 
@@ -311,38 +400,34 @@ def hot_topic_generator_node(state: HotTopicState):
         return {"hot_topics": fallback_topics, "messages": [result]}
 
 def image_fetcher_node(state: HotTopicState):
-    """Fetches images for hot topics."""
-    print("--- 🖼️ FETCHING IMAGES ---")
-    
-    PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
-    if PEXELS_API_KEY:
-        try:
-            pexels_api = Pexels(PEXELS_API_KEY)
-        except:
-            pexels_api = None
-    else:
-        pexels_api = None
+    """Fetches relevant images for hot topics using Brave Search API."""
+    print("--- 🖼️ FETCHING RELEVANT IMAGES ---")
     
     image_urls = {}
     
     if state.get('hot_topics') and 'topics' in state['hot_topics']:
         for i, topic in enumerate(state['hot_topics']['topics']):
-            category = topic.get('category', 'news').lower()
-            search_term = f"{category} news business"
+            headline = topic.get('headline', '')
+            category = topic.get('category', 'General')
             
-            if pexels_api:
-                try:
-                    search_photos = pexels_api.search_photos(search_term, page=1, per_page=1)
-                    if search_photos.get('photos'):
-                        image_urls[f"topic_{i}"] = search_photos['photos'][0]['src']['original']
-                    else:
-                        image_urls[f"topic_{i}"] = "https://images.pexels.com/photos/518543/pexels-photo-518543.jpeg"
-                except Exception as e:
-                    print(f"Error fetching image for topic {i}: {e}")
-                    image_urls[f"topic_{i}"] = "https://images.pexels.com/photos/518543/pexels-photo-518543.jpeg"
-            else:
-                image_urls[f"topic_{i}"] = "https://images.pexels.com/photos/518543/pexels-photo-518543.jpeg"
+            print(f"--- Searching image for topic {i+1}: {headline} (Category: {category}) ---")
+            
+            try:
+                # Search for relevant image based on headline and category
+                image_url = search_relevant_images.invoke({
+                    "topic_title": headline,
+                    "category": category
+                })
+                
+                image_urls[f"topic_{i}"] = image_url
+                print(f"--- ✅ Found image for topic {i+1}: {image_url} ---")
+                
+            except Exception as e:
+                print(f"--- ❌ Error fetching image for topic {i+1}: {e} ---")
+                # Use fallback image
+                image_urls[f"topic_{i}"] = get_fallback_image(category)
     
+    print(f"--- 🖼️ FETCHED {len(image_urls)} IMAGES ---")
     return {"image_urls": image_urls, "messages": []}
 
 def aggregator_node(state: HotTopicState):
@@ -355,7 +440,7 @@ def aggregator_node(state: HotTopicState):
             topic_with_image = {
                 **topic,
                 "id": str(uuid.uuid4()),
-                "image_url": state.get('image_urls', {}).get(f"topic_{i}", "https://images.pexels.com/photos/518543/pexels-photo-518543.jpeg"),
+                "image_url": state.get('image_urls', {}).get(f"topic_{i}", get_fallback_image(topic.get('category', 'General'))),
                 "generated_at": state.get('generated_at', datetime.now().isoformat())
             }
             final_topics.append(topic_with_image)
@@ -477,7 +562,8 @@ def read_root():
         "version": "2.0.0",
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "focus": "Important news only - no celebrity, sports, or entertainment"
+        "focus": "Important news only - no celebrity, sports, or entertainment",
+        "image_source": "Brave Search API for relevant images"
     }
 
 @app.get("/health")
@@ -489,7 +575,8 @@ def health_check():
         "cache_status": "active" if hot_topics_manager.cache else "empty",
         "last_generated": hot_topics_manager.last_generated.isoformat() if hot_topics_manager.last_generated else None,
         "topics_count": len(hot_topics_manager.cache.get('topics', [])),
-        "workflow_status": "initialized" if hot_topics_manager.workflow else "failed"
+        "workflow_status": "initialized" if hot_topics_manager.workflow else "failed",
+        "brave_api_configured": bool(os.getenv("BRAVE_API_KEY"))
     }
 
 @app.get("/api/feed")
@@ -512,7 +599,7 @@ def get_feed():
                 "publishedAt": topic.get("generated_at", datetime.now().isoformat()),
                 "readTime": 3,
                 "sourceCount": 1,
-                "heroImageUrl": topic.get("image_url", "https://images.pexels.com/photos/518543/pexels-photo-518543.jpeg"),
+                "heroImageUrl": topic.get("image_url", get_fallback_image(topic.get("category", "General"))),
                 "authorName": "AI News Curator",
                 "authorTitle": "Important News Generator"
             }
@@ -645,7 +732,8 @@ def debug_topics():
         "last_generated": hot_topics_manager.last_generated.isoformat() if hot_topics_manager.last_generated else None,
         "cache_content": hot_topics_manager.cache,
         "manager_status": "initialized" if hot_topics_manager.workflow else "failed",
-        "workflow_exists": hot_topics_manager.workflow is not None
+        "workflow_exists": hot_topics_manager.workflow is not None,
+        "brave_api_configured": bool(os.getenv("BRAVE_API_KEY"))
     }
 
 @app.get("/api/topics-info")
@@ -656,7 +744,8 @@ def get_topics_info():
         "topics_count": len(hot_topics_manager.cache.get('topics', [])),
         "last_generated": hot_topics_manager.last_generated.isoformat() if hot_topics_manager.last_generated else None,
         "next_generation": (hot_topics_manager.last_generated + timedelta(hours=6)).isoformat() if hot_topics_manager.last_generated else None,
-        "focus": "Important news: Politics, Technology, Business, Health, International, Environment, Education"
+        "focus": "Important news: Politics, Technology, Business, Health, International, Environment, Education",
+        "image_source": "Brave Search API for contextually relevant images"
     }
 
 if __name__ == "__main__":
@@ -672,5 +761,6 @@ if __name__ == "__main__":
     print("  GET  /api/topics-info    - Get topics cache info")
     print("  POST /api/research       - Trigger research")
     print("🎯 FOCUS: Important news only - Politics, Technology, Business, Health, International")
+    print("🖼️ IMAGES: Brave Search API for contextually relevant images")
     
     uvicorn.run(app, host="0.0.0.0", port=8000)

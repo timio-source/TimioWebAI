@@ -460,11 +460,7 @@ def brave_image_search(query: str, count: int = 5) -> List[str]:
             logger.warning("BRAVE_API_KEY not found, skipping Brave image search")
             return []
         
-        # Encode the query for URL
-        encoded_query = quote(query)
-        
-        # Brave Image Search API endpoint
-        url = f"https://api.search.brave.com/res/v1/images/search"
+        url = "https://api.search.brave.com/res/v1/images/search"
         
         headers = {
             'Accept': 'application/json',
@@ -474,12 +470,11 @@ def brave_image_search(query: str, count: int = 5) -> List[str]:
         
         params = {
             'q': query,
-            'count': min(count, 10),  # Limit to 10 max
+            'count': min(count, 10),
             'search_lang': 'en',
             'country': 'US',
             'safesearch': 'moderate',
-            'freshness': 'pd',  # Past day for fresh content
-            'size': 'large'  # Prefer larger images
+            'size': 'large'
         }
         
         logger.info(f"Searching Brave for images: {query}")
@@ -492,10 +487,11 @@ def brave_image_search(query: str, count: int = 5) -> List[str]:
         if 'results' in data:
             for result in data['results'][:count]:
                 if 'src' in result:
-                    # Prefer the original image URL
                     image_url = result.get('src', '')
                     if image_url and image_url.startswith('http'):
-                        images.append(image_url)
+                        # Filter for quality
+                        if not any(skip in image_url.lower() for skip in ['thumbnail', 'avatar', 'icon', 'logo']):
+                            images.append(image_url)
         
         logger.info(f"Brave returned {len(images)} images for query: {query}")
         return images
@@ -563,55 +559,18 @@ def duckduckgo_image_search(query: str, count: int = 5) -> List[str]:
         logger.warning(f"DuckDuckGo image search failed for '{query}': {e}")
         return []
 
-@tool
+@tool  
 def unsplash_image_search(query: str, count: int = 5) -> List[str]:
-    """Search for images using Unsplash API as another fallback."""
+    """Fallback image search using source.unsplash.com for random images."""
     try:
-        unsplash_access_key = os.getenv('UNSPLASH_ACCESS_KEY')
-        if not unsplash_access_key:
-            logger.warning("UNSPLASH_ACCESS_KEY not found, using source.unsplash.com")
-            # Fallback to source.unsplash.com for random images
-            base_url = f"https://source.unsplash.com/800x600/"
-            query_terms = query.replace(' ', ',')
-            return [f"{base_url}?{query_terms}&{i}" for i in range(count)]
-        
-        url = "https://api.unsplash.com/search/photos"
-        
-        headers = {
-            'Authorization': f'Client-ID {unsplash_access_key}',
-            'Accept-Version': 'v1'
-        }
-        
-        params = {
-            'query': query,
-            'per_page': min(count, 10),
-            'orientation': 'landscape',
-            'order_by': 'relevant'
-        }
-        
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        response.raise_for_status()
-        
-        data = response.json()
-        images = []
-        
-        if 'results' in data:
-            for result in data['results'][:count]:
-                if 'urls' in result:
-                    # Use regular size image
-                    image_url = result['urls'].get('regular', result['urls'].get('small', ''))
-                    if image_url:
-                        images.append(image_url)
-        
-        logger.info(f"Unsplash returned {len(images)} images for query: {query}")
-        return images
-        
-    except Exception as e:
-        logger.warning(f"Unsplash image search failed for '{query}': {e}")
-        # Final fallback to source.unsplash.com
-        base_url = f"https://source.unsplash.com/800x600/"
+        # Use source.unsplash.com for random images without API key
+        base_url = "https://source.unsplash.com/800x600/"
         query_terms = query.replace(' ', ',')
         return [f"{base_url}?{query_terms}&{i}" for i in range(count)]
+        
+    except Exception as e:
+        logger.warning(f"Unsplash fallback failed for '{query}': {e}")
+        return []
 
 @tool
 def extract_article_images(url: str) -> List[str]:
@@ -677,18 +636,18 @@ def extract_article_images(url: str) -> List[str]:
 
 @tool
 def generate_contextual_image(query: str, sources: List[str] = None) -> str:
-    """Generate contextual images with improved fallback hierarchy."""
+    """Generate contextual images using Brave Search with improved fallback hierarchy."""
     
     # Strategy 1: Try Brave image search first
     logger.info(f"Trying Brave image search for: {query}")
-    brave_images = brave_image_search(query, count=1)
+    brave_images = brave_image_search(query, count=3)
     if brave_images:
         logger.info(f"Using Brave image for query: {query}")
         return brave_images[0]
     
     # Strategy 2: If we have sources, try to extract images from them
     if sources:
-        for source_url in sources[:3]:  # Check first 3 sources
+        for source_url in sources[:3]:
             try:
                 extracted_images = extract_article_images(source_url)
                 if extracted_images:
@@ -698,24 +657,49 @@ def generate_contextual_image(query: str, sources: List[str] = None) -> str:
                 logger.warning(f"Failed to extract image from {source_url}: {e}")
                 continue
     
-    # Strategy 3: Try DuckDuckGo image search
+    # Strategy 3: Try category-specific Brave search
+    category_queries = {
+        "politics": f"{query} government politics news",
+        "technology": f"{query} tech innovation AI",
+        "business": f"{query} business economy finance", 
+        "health": f"{query} medical health healthcare",
+        "international": f"{query} world global news",
+        "environment": f"{query} climate environment"
+    }
+    
+    for category, enhanced_query in category_queries.items():
+        if category.lower() in query.lower():
+            enhanced_images = brave_image_search(enhanced_query, count=1)
+            if enhanced_images:
+                logger.info(f"Using enhanced Brave search for category {category}")
+                return enhanced_images[0]
+    
+    # Strategy 4: Try DuckDuckGo as fallback
     logger.info(f"Trying DuckDuckGo image search for: {query}")
     duckduckgo_images = duckduckgo_image_search(query, count=1)
     if duckduckgo_images:
         logger.info(f"Using DuckDuckGo image for query: {query}")
         return duckduckgo_images[0]
     
-    # Strategy 4: Try Unsplash search
-    logger.info(f"Trying Unsplash image search for: {query}")
-    unsplash_images = unsplash_image_search(query, count=1)
-    if unsplash_images:
-        logger.info(f"Using Unsplash image for query: {query}")
-        return unsplash_images[0]
+    # Final fallback: Category-appropriate fallback images
+    fallback_images = {
+        "politics": "https://images.unsplash.com/photo-1529107386315-e1a2ed48a620?w=800",
+        "technology": "https://images.unsplash.com/photo-1518709268805-4e9042af2176?w=800", 
+        "business": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=800",
+        "health": "https://images.unsplash.com/photo-1576091160399-112ba8d25d1f?w=800",
+        "environment": "https://images.unsplash.com/photo-1569163139394-de4e4f43e4e5?w=800",
+        "international": "https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?w=800",
+        "general": "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800"
+    }
     
-    # Final fallback: Generic news-related Unsplash image
-    logger.info(f"Using final fallback image for query: {query}")
-    fallback_terms = "news,breaking,journalism,media"
-    return f"https://source.unsplash.com/800x600/?{fallback_terms}"
+    # Determine category from query
+    for category in fallback_images.keys():
+        if category in query.lower():
+            logger.info(f"Using fallback image for category: {category}")
+            return fallback_images[category]
+    
+    logger.info(f"Using general fallback image for query: {query}")
+    return fallback_images["general"]
 
 tavily_tool = TavilySearch()
 tools = [tavily_tool, scrape_website, extract_article_images, brave_image_search, duckduckgo_image_search, unsplash_image_search, generate_contextual_image]
